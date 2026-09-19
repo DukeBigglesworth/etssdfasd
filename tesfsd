@@ -1,0 +1,3208 @@
+local S = getgenv().Settings
+
+local Players            = game:GetService("Players")
+local RunService         = game:GetService("RunService")
+local TweenService       = game:GetService("TweenService")
+local HttpService        = game:GetService("HttpService")
+local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+local TextChatService    = game:GetService("TextChatService")
+local CoreGui            = game:GetService("CoreGui")
+local StarterGui         = game:GetService("StarterGui")
+local VirtualUser        = game:GetService("VirtualUser")
+local VoiceChatService   = game:GetService("VoiceChatService")
+local PathfindingService = game:GetService("PathfindingService")
+local Debris             = game:GetService("Debris")
+
+local LP = Players.LocalPlayer
+local LocalPlayer = LP
+
+local isMain     = (LP.Name == S.mainAccount)
+local isAlt      = (S.altAccounts[LP.Name] == true)
+local isQueueBot = (LP.Name == S.queueBot)
+
+local isKahootBot = false
+do
+    local bots = S.kahootBots or {}
+    for _, botName in ipairs(bots) do
+        if LP.Name:lower() == tostring(botName):lower() then
+            isKahootBot = true
+            break
+        end
+    end
+end
+
+if not isMain and not isAlt and not isKahootBot and not isQueueBot then
+    return
+end
+
+if isAlt then
+    pcall(function()
+        if setfpscap then setfpscap(S.fpslimit or 30) end
+    end)
+    LP.Idled:Connect(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end)
+end
+
+local Conns = {}
+local function track(c)
+    if c then table.insert(Conns, c) end
+    return c
+end
+
+local function cleanupAll()
+    for _, c in ipairs(Conns) do
+        pcall(function() c:Disconnect() end)
+    end
+    table.clear(Conns)
+end
+
+if getgenv().SchweinsAltCleanup then
+    pcall(getgenv().SchweinsAltCleanup)
+end
+getgenv().SchweinsAltCleanup = cleanupAll
+
+local Authorized = { [S.mainAccount] = true }
+local AuthorizedIds = {}
+do
+    local extra = S.authorizedUsers or S.Authorized or S.whitelist
+    if type(extra) == "table" then
+        for k, v in pairs(extra) do
+            if type(k) == "string" and v == true then
+                Authorized[k] = true
+            elseif type(v) == "string" then
+                Authorized[v] = true
+            elseif type(v) == "number" then
+                AuthorizedIds[tostring(v)] = true
+            end
+        end
+    end
+end
+
+local function isMainName(name)
+    if not name then return false end
+    return tostring(name):lower() == tostring(S.mainAccount):lower()
+end
+
+local function isAuthorized(plr)
+    if not plr then return false end
+    if isMainName(plr.Name) then return true end
+    if AuthorizedIds[tostring(plr.UserId)] == true then return true end
+    if Authorized[plr.Name] == true then return true end
+    if plr.DisplayName and Authorized[plr.DisplayName] == true then return true end
+    local ln = plr.Name:lower()
+    local ld = plr.DisplayName and plr.DisplayName:lower() or ""
+    for name, ok in pairs(Authorized) do
+        if ok and type(name) == "string" then
+            local n = name:lower()
+            if n == ln or (ld ~= "" and n == ld) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function grantAuth(name, userId)
+    if name and name ~= "" then
+        Authorized[tostring(name)] = true
+    end
+    if userId then
+        AuthorizedIds[tostring(userId)] = true
+    end
+end
+
+local function revokeAuth(name, userId)
+    if name and not isMainName(name) then
+        Authorized[tostring(name)] = nil
+    end
+    if userId then
+        AuthorizedIds[tostring(userId)] = nil
+    end
+end
+
+-- music suggest lists (queue bot enforces these)
+local MusicWhitelist = {} -- if any entries, ONLY these names/ids can /play
+local MusicBlacklist = {} -- always blocked from /play
+local MusicWhitelistIds = {}
+local MusicBlacklistIds = {}
+
+local function musicListGrant(list, idList, name, userId)
+    if name and name ~= "" then list[name] = true end
+    if userId then idList[tostring(userId)] = true end
+end
+
+local function musicListRevoke(list, idList, name, userId)
+    if name then list[name] = nil end
+    if userId then idList[tostring(userId)] = nil end
+end
+
+-- everyone can suggest by default; ONLY blacklist blocks
+local function canSuggestMusic(plr)
+    if not plr then return false end
+    if plr.Name == S.mainAccount then return true end
+    if MusicBlacklist[plr.Name] or MusicBlacklistIds[tostring(plr.UserId)] then
+        return false
+    end
+    return true
+end
+
+local function Say(msg)
+    if not msg then return end
+    pcall(function()
+        local r = ReplicatedStorage:FindFirstChild("SayMessageRequest", true)
+        if r then
+            r:FireServer(tostring(msg), "All")
+            return
+        end
+        local g = TextChatService:FindFirstChild("RBXGeneral", true)
+        if g then
+            g:SendAsync(tostring(msg))
+        end
+    end)
+end
+
+local function Whisper(plr, msg)
+    if not plr or not msg then return end
+    local name = plr.Name
+    -- try classic whisper
+    pcall(function()
+        local r = ReplicatedStorage:FindFirstChild("SayMessageRequest", true)
+        if r then
+            r:FireServer("/w " .. name .. " " .. tostring(msg), "All")
+            return
+        end
+    end)
+    pcall(function()
+        local g = TextChatService:FindFirstChild("RBXGeneral", true)
+        if g then
+            g:SendAsync("/w " .. name .. " " .. tostring(msg))
+            return
+        end
+    end)
+    pcall(function()
+        -- TextChatService whisper channel if present
+        local channels = TextChatService:FindFirstChild("TextChannels")
+        if channels then
+            local w = channels:FindFirstChild("RBXWhisper:" .. name)
+                or channels:FindFirstChild("RBXWhisper")
+            if w and w.SendAsync then
+                w:SendAsync(tostring(msg))
+            end
+        end
+    end)
+end
+
+
+local AvcbActive = false
+local AvcbRunning = false
+
+local function ForceUnmuteLocal()
+    pcall(function()
+        local adi = LP:FindFirstChildWhichIsA("AudioDeviceInput", true)
+        if adi then
+            adi.Muted = false
+            adi.Active = true
+        end
+    end)
+    pcall(function()
+        local vci = game:FindFirstChild("VoiceChatInternal") or game:GetService("VoiceChatInternal")
+        if vci and vci.PublishPause then
+            vci:PublishPause(false)
+        end
+    end)
+end
+
+local function UnmuteLocal()
+    ForceUnmuteLocal()
+    if isAlt then
+        Say("unmuted")
+    end
+end
+
+local function MuteLocal()
+    if AvcbActive then
+        pcall(function()
+            local adi = LP:FindFirstChildWhichIsA("AudioDeviceInput", true)
+            if adi then
+                adi.Active = false
+            end
+        end)
+        if isAlt then
+            Say("muted")
+        end
+        return
+    end
+    pcall(function()
+        local adi = LP:FindFirstChildWhichIsA("AudioDeviceInput", true)
+        if adi then
+            adi.Muted = true
+            adi.Active = false
+        end
+    end)
+    pcall(function()
+        local vci = game:FindFirstChild("VoiceChatInternal") or game:GetService("VoiceChatInternal")
+        if vci and vci.PublishPause then
+            vci:PublishPause(true)
+        end
+    end)
+    if isAlt then
+        Say("muted")
+    end
+end
+
+local clonereference = cloneref or function(...) return ... end
+local clonefunction  = clonefunction or function(...) return ... end
+local voicechatservice  = clonereference(VoiceChatService)
+local voicechatinternal = nil
+pcall(function()
+    voicechatinternal = clonereference(game:GetService("VoiceChatInternal"))
+end)
+local getconnectionsfunc = nil
+pcall(function()
+    if getconnections then
+        getconnectionsfunc = clonefunction(getconnections)
+    end
+end)
+
+local mutedimage = "rbxasset://textures/ui/VoiceChat/MicLight/Muted.png"
+
+local function isMicMuted()
+    local muted
+    pcall(function()
+        local adi = LP:FindFirstChildWhichIsA("AudioDeviceInput", true)
+        if adi then
+            if adi.Muted == true then muted = true return end
+            if adi.Active == false then muted = true return end
+            if adi.Muted == false then muted = false return end
+        end
+    end)
+    if type(muted) == "boolean" then return muted end
+    pcall(function()
+        if voicechatinternal and typeof(voicechatinternal.IsMuted) == "function" then
+            muted = voicechatinternal:IsMuted()
+        end
+    end)
+    if type(muted) == "boolean" then return muted end
+    return nil
+end
+
+local function setmutestate(state)
+    local adi = LP:FindFirstChildWhichIsA("AudioDeviceInput", true)
+    if adi then
+        adi.Active = not state
+        return
+    end
+    pcall(function()
+        if voicechatinternal and voicechatinternal.PublishPause then
+            voicechatinternal:PublishPause(state)
+        end
+    end)
+end
+
+local function runAVCB(opts)
+    opts = type(opts) == "table" and opts or {}
+    local forceUnmuteAtEnd = opts.forceUnmuteAtEnd == true
+    local ismuted = true
+    local hiddenfolder = Instance.new("Folder")
+    hiddenfolder.Name = "Schwein_VC_Hidden"
+    pcall(function()
+        hiddenfolder.Parent = game:GetService("RobloxReplicatedStorage")
+    end)
+
+    local topbarapp, unibarleft, unibarmenu, unibarcontainer, micmutebutton
+    local clonedicon, originalicon
+    pcall(function()
+        topbarapp = CoreGui:WaitForChild("TopBarApp", 15)
+        topbarapp = topbarapp:WaitForChild("TopBarApp", 15)
+    end)
+    pcall(function()
+        unibarleft = topbarapp:WaitForChild("UnibarLeftFrame", 15)
+    end)
+    pcall(function()
+        unibarmenu = unibarleft:FindFirstChild("UnibarMenu")
+            or unibarleft:FindFirstChild("ChromeMenu")
+            or unibarleft:WaitForChild("UnibarMenu", 8)
+            or unibarleft:WaitForChild("ChromeMenu", 8)
+    end)
+    pcall(function()
+        unibarcontainer = unibarmenu:WaitForChild("2", 15):WaitForChild("3", 15)
+    end)
+    pcall(function()
+        micmutebutton = unibarcontainer and unibarcontainer:FindFirstChild("toggle_mic_mute", true)
+    end)
+
+    local function geticonlabel(button)
+        button = button or micmutebutton
+        local result
+        pcall(function()
+            result = button:WaitForChild("IntegrationIconFrame", 15)
+                :WaitForChild("IntegrationIcon", 15)["1"]
+        end)
+        return result
+    end
+
+    if not micmutebutton then
+        pcall(function() voicechatservice:joinVoice() end)
+        task.wait(2)
+        pcall(function()
+            unibarcontainer = unibarmenu:WaitForChild("2", 15):WaitForChild("3", 15)
+            micmutebutton = unibarcontainer:WaitForChild("toggle_mic_mute", 15)
+        end)
+    end
+
+    if not micmutebutton then
+        return false, "mic_button_missing"
+    end
+
+    task.wait(1)
+
+    pcall(function() voicechatservice:leaveVoice() end)
+    task.wait(2)
+
+    pcall(function()
+        if not getconnectionsfunc or not voicechatinternal then return end
+        local connections = getconnectionsfunc(voicechatinternal.StateChanged)
+        for i = 7, #connections do
+            if connections[i] then
+                pcall(function() connections[i]:Disable() end)
+            end
+        end
+    end)
+    task.wait(2)
+
+    local joinDone, joinOk = false, false
+    local joinWait = tick()
+    task.spawn(function()
+        joinOk = pcall(function() voicechatservice:joinVoice() end)
+        joinDone = true
+    end)
+    while not joinDone and tick() - joinWait < 8 do
+        task.wait(0.1)
+    end
+    task.wait(2)
+
+    pcall(function()
+        unibarcontainer = unibarmenu:WaitForChild("2", 15):WaitForChild("3", 15)
+        micmutebutton = unibarcontainer:WaitForChild("toggle_mic_mute", 15)
+    end)
+
+    if micmutebutton and unibarcontainer then
+        pcall(function()
+            local clonedmutebutton = micmutebutton:Clone()
+            micmutebutton.Parent = hiddenfolder
+            clonedmutebutton.Name = "toggle_mic_mute_new"
+            clonedmutebutton.Parent = unibarcontainer
+            clonedicon = geticonlabel(clonedmutebutton)
+            originalicon = geticonlabel(micmutebutton)
+            setmutestate(true)
+            local hit = clonedmutebutton:WaitForChild("IconHitArea_toggle_mic_mute", 15)
+            hit.Activated:Connect(function()
+                ismuted = not ismuted
+                setmutestate(ismuted)
+                if ismuted then
+                    if clonedicon then clonedicon.Image = mutedimage end
+                else
+                    if clonedicon and originalicon then clonedicon.Image = originalicon.Image end
+                end
+            end)
+        end)
+    end
+
+    local reconnected = false
+    local deadline = tick() + 20
+    local conn
+    pcall(function()
+        if voicechatinternal and voicechatinternal.StateChanged then
+            conn = voicechatinternal.StateChanged:Connect(function(_, new)
+                local n = string.lower(tostring(new and (new.Name or new) or ""))
+                if n:find("join", 1, true) or n:find("connect", 1, true)
+                    or n:find("ingame", 1, true) or n:find("active", 1, true)
+                    or n:find("joined", 1, true) then
+                    reconnected = true
+                end
+            end)
+        end
+    end)
+    while tick() < deadline and not reconnected do
+        pcall(function()
+            local st = voicechatinternal and voicechatinternal.VoiceChatState
+            if st then
+                local n = string.lower(tostring(st.Name or st))
+                if n:find("join", 1, true) or n:find("connect", 1, true)
+                    or n:find("ingame", 1, true) or n:find("joined", 1, true) then
+                    reconnected = true
+                end
+            end
+        end)
+        if not reconnected then
+            pcall(function()
+                local adi = LP:FindFirstChildWhichIsA("AudioDeviceInput", true)
+                if adi and adi.Active ~= nil then
+                    reconnected = true
+                end
+            end)
+        end
+        if joinDone and joinOk and tick() > (joinWait + 1.25) then
+            reconnected = true
+        end
+        task.wait(0.2)
+    end
+    pcall(function() if conn then conn:Disconnect() end end)
+
+    if forceUnmuteAtEnd then
+        local function forceUnmute()
+            pcall(function()
+                setmutestate(false)
+            end)
+            ismuted = false
+            pcall(function()
+                local adi = LocalPlayer:FindFirstChildWhichIsA("AudioDeviceInput", true)
+                if adi then
+                    adi.Muted = false
+                    adi.Active = true
+                end
+            end)
+            pcall(function()
+                if voicechatinternal and typeof(voicechatinternal.PublishPause) == "function" then
+                    voicechatinternal:PublishPause(false)
+                end
+            end)
+        end
+        forceUnmute()
+        task.defer(forceUnmute)
+        task.delay(0.5, forceUnmute)
+    end
+
+    return true, reconnected and "ok" or "ok_quiet"
+end
+
+local function cmd_avcb()
+    if AvcbRunning then
+        if isAlt then Say("avcb already running") end
+        return
+    end
+    if AvcbActive then
+        if isAlt then Say("avcb already active") end
+        return
+    end
+    if not getconnectionsfunc then
+        if isAlt then Say("avcb unsupported executor") end
+        print("[Schweins Alt Control] AVCB needs getconnections (Xeno unsupported)")
+        return
+    end
+    AvcbRunning = true
+    if isAlt then
+        local muted = isMicMuted()
+        if muted == true then
+            Say("unmute then waiting...")
+        else
+            Say("avcb starting...")
+        end
+    end
+    task.spawn(function()
+        local ok, reason = pcall(function()
+            local success, r = runAVCB({ forceUnmuteAtEnd = false })
+            if not success then error(tostring(r or "fail")) end
+        end)
+        AvcbRunning = false
+        if ok then
+            AvcbActive = true
+            if isAlt then Say("avcb active use .mute .unmute only") end
+            print("[Schweins Alt Control] AVCB active")
+        else
+            if isAlt then Say("avcb failed: " .. tostring(reason):sub(1, 40)) end
+            print("[Schweins Alt Control] AVCB failed:", reason)
+        end
+    end)
+end
+
+local function CreateBlackout()
+    if not isAlt then return end
+    pcall(function()
+        for _, g in ipairs(CoreGui:GetChildren()) do
+            if g.Name == "SchweinsAltBlackout" then g:Destroy() end
+        end
+        local pg = LP:FindFirstChild("PlayerGui")
+        if pg then
+            for _, g in ipairs(pg:GetChildren()) do
+                if g.Name == "SchweinsAltBlackout" then g:Destroy() end
+            end
+        end
+    end)
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "SchweinsAltBlackout"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.DisplayOrder = -10
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.fromScale(1, 1)
+    bg.BackgroundColor3 = Color3.new(0, 0, 0)
+    bg.BorderSizePixel = 0
+    bg.Parent = gui
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 70)
+    title.Position = UDim2.new(0, 0, 0.5, -45)
+    title.BackgroundTransparency = 1
+    title.Text = "Schweins Alt Control"
+    title.TextColor3 = Color3.fromRGB(230, 230, 240)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 34
+    title.Parent = bg
+    local sub = Instance.new("TextLabel")
+    sub.Size = UDim2.new(1, 0, 0, 28)
+    sub.Position = UDim2.new(0, 0, 0.5, 25)
+    sub.BackgroundTransparency = 1
+    sub.Text = LP.Name
+    sub.TextColor3 = Color3.fromRGB(140, 140, 160)
+    sub.Font = Enum.Font.Gotham
+    sub.TextSize = 16
+    sub.Parent = bg
+    pcall(function() gui.Parent = CoreGui end)
+    if not gui.Parent then
+        gui.Parent = LP:WaitForChild("PlayerGui")
+    end
+end
+
+if isAlt then
+    task.defer(CreateBlackout)
+end
+
+local CurrentWeld = nil
+local ActiveLoops = {}
+local NpcMode = false
+local MineMode = false
+local ElevatorParts = {}
+local DanceTrack = nil
+local NoclipConn = nil
+
+local MoveSettings = {
+    OrbitSpeed       = S.OrbitSpeed or 1.8,
+    OrbitRadius      = S.OrbitRadius or 7,
+    SpiralSpeed      = S.SpiralSpeed or 1.5,
+    SpiralRadius     = S.SpiralRadius or 6,
+    HelicopterSpeed  = S.HelicopterSpeed or 4,
+    HelicopterRadius = S.HelicopterRadius or 4,
+    SpamSpeed        = S.SpamSpeed or 0.12,
+    Height           = 0,
+}
+
+local function GetRoot(plr)
+    local c = plr and plr.Character
+    if not c then return nil end
+    return c:FindFirstChild("HumanoidRootPart")
+        or c.PrimaryPart
+        or c:FindFirstChild("Torso")
+        or c:FindFirstChild("LowerTorso")
+end
+
+-- continuous loop helpers (same style as orbit: HRP CFrame every frame)
+local function clearHiddenRoot()
+    pcall(function()
+        local myRoot = GetRoot(LP)
+        if myRoot and sethiddenproperty then
+            sethiddenproperty(myRoot, "PhysicsRepRootPart", myRoot)
+        end
+    end)
+end
+
+local function applyRootCF(myRoot, cf, physicsTarget)
+    if not myRoot or typeof(cf) ~= "CFrame" then return end
+    myRoot.CFrame = cf
+    myRoot.AssemblyLinearVelocity = Vector3.zero
+    myRoot.AssemblyAngularVelocity = Vector3.zero
+    if physicsTarget and sethiddenproperty then
+        pcall(function()
+            sethiddenproperty(myRoot, "PhysicsRepRootPart", physicsTarget)
+        end)
+    end
+end
+
+local function FindPlayer(query)
+    if not query or query == "" then return nil end
+    query = tostring(query):lower()
+    local prefixHit, substrHit
+    for _, p in ipairs(Players:GetPlayers()) do
+        local n, d = p.Name:lower(), p.DisplayName:lower()
+        if n == query or d == query then return p end
+        if not prefixHit and (n:sub(1, #query) == query or d:sub(1, #query) == query) then
+            prefixHit = p
+        end
+        if not substrHit and (n:find(query, 1, true) or d:find(query, 1, true)) then
+            substrHit = p
+        end
+    end
+    return prefixHit or substrHit
+end
+
+local function GetAltIndex()
+    local list = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if S.altAccounts[plr.Name] then
+            table.insert(list, plr.Name)
+        end
+    end
+    table.sort(list)
+    local total = #list
+    if total == 0 then return 1, 1 end
+    for i, n in ipairs(list) do
+        if n == LP.Name then
+            return i, total
+        end
+    end
+    return 1, total
+end
+
+local function SetNoclip(on)
+    if NoclipConn then
+        NoclipConn:Disconnect()
+        NoclipConn = nil
+    end
+    if not on then return end
+    NoclipConn = RunService.Stepped:Connect(function()
+        local char = LP.Character
+        if not char then return end
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") then
+                p.CanCollide = false
+            end
+        end
+    end)
+    table.insert(Conns, NoclipConn)
+end
+
+local function StopDance()
+    pcall(function()
+        if DanceTrack then
+            DanceTrack:Stop()
+            DanceTrack = nil
+        end
+    end)
+end
+
+local function StartDance2()
+    pcall(function()
+        StopDance()
+        local char = LP.Character
+        local hum = char and char:FindFirstChildWhichIsA("Humanoid")
+        if not hum then return end
+        local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
+        local ids = {
+            "rbxassetid://507776043", -- r15 dance
+            "rbxassetid://507777826",
+            "rbxassetid://248263260", -- classic r6-ish
+            "rbxassetid://182435998",
+        }
+        for _, id in ipairs(ids) do
+            local ok = pcall(function()
+                local anim = Instance.new("Animation")
+                anim.AnimationId = id
+                local track = animator:LoadAnimation(anim)
+                track.Looped = true
+                track:Play()
+                DanceTrack = track
+            end)
+            if ok and DanceTrack and DanceTrack.IsPlaying then
+                return
+            end
+        end
+        -- last resort: emote chat
+        Say("/e dance2")
+    end)
+end
+
+local function StopAll()
+    for name, obj in pairs(ActiveLoops) do
+        pcall(function()
+            if typeof(obj) == "RBXScriptConnection" then
+                obj:Disconnect()
+            elseif typeof(obj) == "thread" then
+                task.cancel(obj)
+            end
+        end)
+        ActiveLoops[name] = nil
+    end
+    if CurrentWeld then
+        pcall(function() CurrentWeld:Destroy() end)
+        CurrentWeld = nil
+    end
+    clearHiddenRoot()
+    StopDance()
+    SetNoclip(false)
+    pcall(function()
+        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+        if hum then
+            hum.AutoRotate = true
+            hum.PlatformStand = false
+        end
+    end)
+    NpcMode = false
+    MineMode = false
+    for _, p in ipairs(ElevatorParts) do
+        pcall(function() p:Destroy() end)
+    end
+    table.clear(ElevatorParts)
+end
+
+local function WeldTo(targetPart, offsetFunc)
+    local char = LP.Character
+    if not char then return nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildWhichIsA("Humanoid")
+    if not root or not hum then return nil end
+
+    local saved = {}
+    for _, v in ipairs(char:GetDescendants()) do
+        if v:IsA("BasePart") then
+            saved[v] = { CanCollide = v.CanCollide, Massless = v.Massless }
+            v.CanCollide = false
+            v.Massless = true
+        end
+    end
+
+    pcall(function()
+        hum:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+        local st = hum:GetState()
+        if st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.FallingDown then
+            hum:ChangeState(Enum.HumanoidStateType.Running)
+        end
+        hum.PlatformStand = true
+    end)
+
+    pcall(function()
+        if setsimulationradius then
+            setsimulationradius(1e6, 1e6)
+        end
+    end)
+
+    local weld = {}
+    local conn = RunService.Heartbeat:Connect(function()
+        if not char.Parent or not targetPart or not targetPart.Parent then
+            weld:Destroy()
+            return
+        end
+        local ok, offset = pcall(offsetFunc)
+        if not ok or typeof(offset) ~= "CFrame" then
+            offset = CFrame.new()
+        end
+        pcall(function()
+            root.CFrame = targetPart.CFrame * offset
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+        pcall(function()
+            if sethiddenproperty then
+                sethiddenproperty(root, "PhysicsRepRootPart", targetPart)
+            end
+        end)
+        pcall(function()
+            if setsimulationradius then
+                setsimulationradius(1e6, 1e6)
+            end
+        end)
+    end)
+
+    function weld:Destroy()
+        if conn then
+            conn:Disconnect()
+            conn = nil
+        end
+        pcall(function()
+            if root and root.Parent then
+                if sethiddenproperty then
+                    sethiddenproperty(root, "PhysicsRepRootPart", root)
+                end
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end
+            for part, props in pairs(saved) do
+                if part and part.Parent then
+                    part.CanCollide = props.CanCollide
+                    part.Massless = props.Massless
+                end
+            end
+            if hum and hum.Parent then
+                hum:SetStateEnabled(Enum.HumanoidStateType.Freefall, true)
+                hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+                hum.PlatformStand = false
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
+        end)
+    end
+    return weld
+end
+
+local function TeleportOnce(cf)
+    local char = LP.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    pcall(function()
+        root.CFrame = cf
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+end
+
+local function PlayAnim(id)
+    local char = LP.Character
+    local hum = char and char:FindFirstChildWhichIsA("Humanoid")
+    if not hum then return end
+    pcall(function()
+        local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
+        local anim = Instance.new("Animation")
+        anim.AnimationId = "rbxassetid://" .. tostring(id)
+        local track = animator:LoadAnimation(anim)
+        track:Play()
+    end)
+end
+
+local function cmd_adduser(name)
+    -- every bot that hears main type .adduser applies it locally (no chat sync needed)
+    if not name or tostring(name):gsub("%s+", "") == "" then
+        if isMain then Say("usage: .adduser name") end
+        return
+    end
+    local p = FindPlayer(name)
+    local targetName = p and p.Name or tostring(name):match("%S+")
+    local targetId = p and p.UserId or nil
+    if not targetName then
+        if isMain then Say("user not found") end
+        return
+    end
+    grantAuth(targetName, targetId)
+    if p and p.DisplayName then
+        grantAuth(p.DisplayName, targetId)
+    end
+    if isMain then
+        Say("added " .. targetName .. " as an authorized user")
+    end
+end
+
+local function cmd_removeuser(name)
+    if not name or tostring(name):gsub("%s+", "") == "" then return end
+    local p = FindPlayer(name)
+    local targetName = p and p.Name or tostring(name):match("%S+")
+    local targetId = p and p.UserId or nil
+    if isMainName(targetName) then return end
+    revokeAuth(targetName, targetId)
+    if p and p.DisplayName then
+        revokeAuth(p.DisplayName, targetId)
+    end
+    if isMain then
+        Say("removed " .. tostring(targetName))
+    end
+end
+
+local function cmd_mwl(name)
+    -- runs on every bot that hears main's .mwl so queue bot gets the list with no extra chat
+    local p = FindPlayer(name)
+    local targetName = p and p.Name or (name and tostring(name):match("%S+"))
+    local targetId = p and p.UserId or nil
+    if not targetName then return end
+    musicListGrant(MusicWhitelist, MusicWhitelistIds, targetName, targetId)
+    if isMain and p then
+        Whisper(p, "You've been whitelisted for music suggestions. You can /play songs near the music bot.")
+    end
+end
+
+local function cmd_unmwl(name)
+    local p = FindPlayer(name)
+    local targetName = p and p.Name or (name and tostring(name):match("%S+"))
+    local targetId = p and p.UserId or nil
+    if not targetName then return end
+    musicListRevoke(MusicWhitelist, MusicWhitelistIds, targetName, targetId)
+    if isMain and p then
+        Whisper(p, "You've been removed from the music suggestion whitelist.")
+    end
+end
+
+local function cmd_mwlclear()
+    table.clear(MusicWhitelist)
+    table.clear(MusicWhitelistIds)
+    -- back to default: everyone can suggest (except blacklist)
+end
+
+local function cmd_mbl(name)
+    local p = FindPlayer(name)
+    local targetName = p and p.Name or (name and tostring(name):match("%S+"))
+    local targetId = p and p.UserId or nil
+    if not targetName then return end
+    musicListGrant(MusicBlacklist, MusicBlacklistIds, targetName, targetId)
+    if isMain and p then
+        Whisper(p, "You've been blacklisted from music suggestions. You can't /play songs.")
+    end
+end
+
+local function cmd_unmbl(name)
+    local p = FindPlayer(name)
+    local targetName = p and p.Name or (name and tostring(name):match("%S+"))
+    local targetId = p and p.UserId or nil
+    if not targetName then return end
+    musicListRevoke(MusicBlacklist, MusicBlacklistIds, targetName, targetId)
+    if isMain and p then
+        Whisper(p, "You've been removed from the music suggestion blacklist. You can /play again if allowed.")
+    end
+end
+
+local function cmd_chat(msg)
+    if msg and msg ~= "" then Say(msg) end
+end
+
+local function cmd_sit()
+    local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+    if hum then hum.Sit = true end
+end
+
+local function cmd_jump()
+    local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+    if hum then hum.Jump = true end
+end
+
+local function cmd_re()
+    local c = LP.Character
+    if c then pcall(function() c:BreakJoints() end) end
+end
+
+local function cmd_forcereset()
+    local c = LP.Character
+    if not c then return end
+    pcall(function()
+        local hum = c:FindFirstChildWhichIsA("Humanoid")
+        if hum then hum.Health = 0 end
+        c:BreakJoints()
+        task.wait(0.1)
+        if c.Parent then c:Destroy() end
+    end)
+end
+
+local function cmd_quit()
+    pcall(function() game:Shutdown() end)
+end
+
+local function cmd_bring()
+    local main = Players:FindFirstChild(S.mainAccount)
+    if not main then return end
+    local root = GetRoot(main)
+    if not root then return end
+    StopAll()
+    TeleportOnce(root.CFrame)
+end
+
+local function cmd_goto(name)
+    local p = FindPlayer(name)
+    if not p then return end
+    local root = GetRoot(p)
+    if not root then return end
+    StopAll()
+    TeleportOnce(root.CFrame * CFrame.new(0, 0, 3))
+end
+
+local function cmd_follow(name)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    StopAll()
+    local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+    if not hum then return end
+    local conn = RunService.Heartbeat:Connect(function()
+        local root = GetRoot(p)
+        if not root or not hum.Parent then return end
+        hum:MoveTo(root.Position)
+    end)
+    ActiveLoops["follow"] = conn
+end
+
+local function cmd_walkto(name)
+    cmd_follow(name)
+end
+
+local function cmd_pf(name)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    local targetRoot = GetRoot(p)
+    if not targetRoot then return end
+    StopAll()
+    local char = LP.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildWhichIsA("Humanoid")
+    if not root or not hum then return end
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2,
+        AgentHeight = 5,
+        AgentCanJump = true,
+    })
+    local ok = pcall(function()
+        path:ComputeAsync(root.Position, targetRoot.Position)
+    end)
+    if not ok or path.Status ~= Enum.PathStatus.Success then
+        local conn = RunService.Heartbeat:Connect(function()
+            local tr = GetRoot(p)
+            if tr and hum.Parent then
+                hum:MoveTo(tr.Position)
+            end
+        end)
+        ActiveLoops["pf"] = conn
+        return
+    end
+    local waypoints = path:GetWaypoints()
+    local idx = 1
+    local conn = RunService.Heartbeat:Connect(function()
+        if not root or not root.Parent or not hum.Parent then return end
+        local tr = GetRoot(p)
+        if not tr then return end
+        if idx > #waypoints then
+            hum:MoveTo(tr.Position)
+            return
+        end
+        local wp = waypoints[idx]
+        if (root.Position - wp.Position).Magnitude < 4 then
+            idx += 1
+            if wp.Action == Enum.PathWaypointAction.Jump then
+                hum.Jump = true
+            end
+        else
+            hum:MoveTo(wp.Position)
+        end
+    end)
+    ActiveLoops["pf"] = conn
+end
+
+local function cmd_circle(a1, a2)
+    local p, rad
+    if a1 and tonumber(a1) and not a2 then
+        p = Players:FindFirstChild(S.mainAccount)
+        rad = tonumber(a1)
+    else
+        p = FindPlayer(a1) or Players:FindFirstChild(S.mainAccount)
+        rad = tonumber(a2) or tonumber(a1) or MoveSettings.OrbitRadius
+        if FindPlayer(a1) then
+            rad = tonumber(a2) or MoveSettings.OrbitRadius
+        end
+    end
+    if not p then return end
+    local root = GetRoot(p)
+    if not root then return end
+    StopAll()
+    rad = rad or MoveSettings.OrbitRadius
+    local idx, total = GetAltIndex()
+    local angle = ((idx - 1) / math.max(total, 1)) * math.pi * 2
+    local x = math.cos(angle) * rad
+    local z = math.sin(angle) * rad
+    local pos = root.Position + Vector3.new(x, 0, z)
+    TeleportOnce(CFrame.lookAt(pos, root.Position))
+end
+
+local function worldOrbitLoop(p, getOffset)
+    local root = GetRoot(p)
+    if not root then return end
+    StopAll()
+    StartDance2()
+    SetNoclip(true)
+    local spin = 0
+    local lastT = tick()
+    pcall(function()
+        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+        if hum then
+            hum.AutoRotate = false
+            hum.PlatformStand = true
+        end
+    end)
+    ActiveLoops.orbit = RunService.Heartbeat:Connect(function()
+        root = GetRoot(p)
+        local myRoot = GetRoot(LP)
+        if not root or not myRoot then return end
+        local now = tick()
+        local dt = math.clamp(now - lastT, 0, 0.05)
+        lastT = now
+        local idx, total = GetAltIndex()
+        total = math.max(total, 1)
+        -- full CFrame so orbit follows your rotation again
+        local cf, newSpin = getOffset(idx, total, root, spin, dt)
+        spin = newSpin
+        if typeof(cf) == "CFrame" then
+            applyRootCF(myRoot, cf, root)
+        end
+    end)
+end
+
+local function cmd_orbit(name, rad)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    if tonumber(rad) then
+        MoveSettings.OrbitRadius = tonumber(rad)
+    end
+    worldOrbitLoop(p, function(idx, total, root, spin, dt)
+        local r = MoveSettings.OrbitRadius
+        local slowFactor = 1
+        local list = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if S.altAccounts[plr.Name] and GetRoot(plr) then
+                table.insert(list, plr)
+            end
+        end
+        table.sort(list, function(a, b) return a.Name < b.Name end)
+        for i, plr in ipairs(list) do
+            local pr = GetRoot(plr)
+            if pr then
+                local baseI = ((i - 1) / total) * math.pi * 2
+                local ideal = (root.CFrame * CFrame.new(math.cos(baseI + spin) * r, MoveSettings.Height, math.sin(baseI + spin) * r)).Position
+                local lag = (pr.Position - ideal).Magnitude
+                if lag > 4 then
+                    slowFactor = math.min(slowFactor, 4 / lag)
+                end
+            end
+        end
+        spin = (spin + MoveSettings.OrbitSpeed * dt * math.max(slowFactor, 0.15)) % (math.pi * 2)
+        local angle = ((idx - 1) / total) * math.pi * 2 + spin
+        local world = root.CFrame * CFrame.new(math.cos(angle) * r, MoveSettings.Height, math.sin(angle) * r)
+        return CFrame.lookAt(world.Position, root.Position), spin
+    end)
+end
+
+local function cmd_orbit2(name, rad)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    if tonumber(rad) then
+        MoveSettings.OrbitRadius = tonumber(rad)
+    end
+    worldOrbitLoop(p, function(idx, total, root, spin, dt)
+        local r = MoveSettings.OrbitRadius
+        spin = (spin + MoveSettings.OrbitSpeed * dt) % (math.pi * 2)
+        local base = ((idx - 1) / total) * math.pi * 2
+        local angle = base + spin
+        local y = math.sin(spin * 2 + base) * 3
+        local world = root.CFrame * CFrame.new(math.cos(angle) * r, MoveSettings.Height + y, math.sin(angle) * r)
+        return CFrame.lookAt(world.Position, root.Position), spin
+    end)
+end
+
+local function cmd_orbit3(name, rad)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    if tonumber(rad) then
+        MoveSettings.OrbitRadius = tonumber(rad)
+    end
+    local spin2 = 0
+    worldOrbitLoop(p, function(idx, total, root, spin, dt)
+        local r = MoveSettings.OrbitRadius
+        spin = spin + MoveSettings.OrbitSpeed * dt
+        spin2 = spin2 + MoveSettings.OrbitSpeed * dt * 0.7
+        local base1 = ((idx - 1) / total) * math.pi * 2
+        local a1 = base1 + spin
+        local a2 = base1 + spin2
+        local x = r * math.sin(a2) * math.cos(a1)
+        local y = r * math.cos(a2) * 0.5
+        local z = r * math.sin(a2) * math.sin(a1)
+        local world = root.CFrame * CFrame.new(x, y + MoveSettings.Height, z)
+        return CFrame.lookAt(world.Position, root.Position), spin
+    end)
+end
+
+local function cmd_spiral(name, rad)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    if tonumber(rad) then
+        MoveSettings.SpiralRadius = tonumber(rad)
+    end
+    worldOrbitLoop(p, function(idx, total, root, spin, dt)
+        local r = MoveSettings.SpiralRadius
+        local phase = (idx / 8) * math.pi * 2
+        spin = spin + MoveSettings.SpiralSpeed * dt
+        local base = ((idx - 1) / total) * math.pi * 2
+        local angle = base + spin
+        local wave = math.sin(spin * 1.4 + phase) * 6 + math.sin(spin * 0.55 + phase * 2) * 3
+        local world = root.CFrame * CFrame.new(math.cos(angle) * r, wave, math.sin(angle) * r)
+        return CFrame.lookAt(world.Position, root.Position), spin
+    end)
+end
+
+local function cmd_spiral2(name, rad)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    if tonumber(rad) then
+        MoveSettings.SpiralRadius = tonumber(rad)
+    end
+    worldOrbitLoop(p, function(idx, total, root, spin, dt)
+        local r = MoveSettings.SpiralRadius
+        local dir = (idx % 2 == 0) and 1 or -1
+        spin = spin + MoveSettings.SpiralSpeed * dt * dir
+        local base = ((idx - 1) / total) * math.pi * 2
+        local angle = base + spin
+        local wave = math.sin(math.abs(spin) * 1.3 + idx) * 5
+        local world = root.CFrame * CFrame.new(math.cos(angle) * r, wave, math.sin(angle) * r)
+        return CFrame.lookAt(world.Position, root.Position), spin
+    end)
+end
+
+local function cmd_helicopter(name, rad)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    if tonumber(rad) then
+        MoveSettings.HelicopterRadius = tonumber(rad)
+    end
+    worldOrbitLoop(p, function(idx, total, root, spin, dt)
+        local r = math.max(MoveSettings.HelicopterRadius, 2)
+        local blade = ((idx - 1) / total) * math.pi * 2
+        spin = spin + MoveSettings.HelicopterSpeed * dt * 2.5
+        local a = spin + blade
+        local world = root.CFrame * CFrame.new(math.cos(a) * r, 5.2, math.sin(a) * r)
+        return world * CFrame.Angles(math.rad(90), 0, a), spin
+    end)
+end
+
+local function cmd_swarm(name)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    StopAll()
+    local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+    if not hum then return end
+    local target = Vector3.zero
+    local nextRetarget = 0
+    local conn = RunService.Heartbeat:Connect(function()
+        local root = GetRoot(p)
+        if not root or not hum.Parent then return end
+        if tick() > nextRetarget or (target - root.Position).Magnitude < 4 then
+            nextRetarget = tick() + math.random(4, 9) / 10
+            local off = Vector3.new(math.random(-16, 16), 0, math.random(-16, 16))
+            target = root.Position + off
+            hum:MoveTo(target)
+        end
+        if hum.MoveDirection.Magnitude < 0.05 then
+            hum:MoveTo(target)
+        end
+    end)
+    ActiveLoops["swarm"] = conn
+end
+
+local function cmd_swarm2(name)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    local root = GetRoot(p)
+    if not root then return end
+    StopAll()
+    SetNoclip(true)
+    local t = 0
+    local seed = LP.UserId % 1000
+    local gx, gy, gz = 0, 6, 0
+    local tx, ty, tz = math.random(-12, 12), math.random(3, 10), math.random(-12, 12)
+    CurrentWeld = WeldTo(root, function()
+        t = t + 0.03
+        gx = gx + (tx - gx) * 0.04
+        gy = gy + (ty - gy) * 0.04
+        gz = gz + (tz - gz) * 0.04
+        if math.abs(gx - tx) < 1.5 and math.abs(gz - tz) < 1.5 then
+            tx = math.random(-14, 14)
+            ty = math.random(2, 12)
+            tz = math.random(-14, 14)
+        end
+        local wobble = CFrame.new(
+            math.sin(t * 1.1 + seed) * 1.5,
+            math.cos(t * 0.8 + seed) * 1.2,
+            math.cos(t * 1.3 + seed) * 1.5
+        )
+        return CFrame.new(gx, gy, gz) * wobble
+    end)
+end
+
+local function cmd_worm(name)
+    local head = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not head then return end
+    StopAll()
+    local spacing = 4
+    local lastMove = 0
+    ActiveLoops.worm = RunService.Heartbeat:Connect(function()
+        local myRoot = GetRoot(LP)
+        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+        if not myRoot or not hum or not hum.Parent then return end
+
+        -- only alts that currently have a character (skip missing / dead)
+        local chain = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if S.altAccounts[plr.Name] and GetRoot(plr) then
+                table.insert(chain, plr)
+            end
+        end
+        table.sort(chain, function(a, b)
+            return a.Name < b.Name
+        end)
+
+        local myIdx = nil
+        for i, plr in ipairs(chain) do
+            if plr == LP then
+                myIdx = i
+                break
+            end
+        end
+        if not myIdx then return end
+
+        -- bot 1 follows head; each next bot follows the previous *present* bot
+        local followPlr = head
+        if myIdx > 1 then
+            followPlr = chain[myIdx - 1]
+        end
+
+        local targetRoot = GetRoot(followPlr)
+        if not targetRoot then
+            targetRoot = GetRoot(head)
+        end
+        if not targetRoot then return end
+
+        local look = targetRoot.CFrame.LookVector
+        local flat = Vector3.new(look.X, 0, look.Z)
+        if flat.Magnitude < 0.05 then
+            flat = Vector3.new(0, 0, 1)
+        else
+            flat = flat.Unit
+        end
+        local goal = targetRoot.Position - flat * spacing
+        local dist = (myRoot.Position - goal).Magnitude
+
+        -- catch up if lagging far behind, otherwise keep MoveTo running like .follow
+        if dist > 40 then
+            myRoot.CFrame = CFrame.new(goal + Vector3.new(0, 3, 0))
+        elseif dist > 1 then
+            -- throttle MoveTo a bit so humanoid path isn't spammed every frame
+            if tick() - lastMove > 0.08 then
+                lastMove = tick()
+                hum:MoveTo(goal)
+            end
+        end
+    end)
+end
+
+local function cmd_stackon(name)
+    local headPlr = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not headPlr then return end
+    StopAll()
+    SetNoclip(true)
+    local height = 5
+    pcall(function()
+        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+        if hum then
+            hum.AutoRotate = false
+            hum.PlatformStand = true
+        end
+    end)
+    ActiveLoops.stackon = RunService.Heartbeat:Connect(function()
+        local chain = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if S.altAccounts[plr.Name] and GetRoot(plr) then
+                table.insert(chain, plr)
+            end
+        end
+        table.sort(chain, function(a, b) return a.Name < b.Name end)
+        local myIdx = nil
+        for i, plr in ipairs(chain) do
+            if plr == LP then myIdx = i break end
+        end
+        if not myIdx then return end
+        local standOn = headPlr
+        if myIdx > 1 then
+            standOn = chain[myIdx - 1]
+        end
+        local base = GetRoot(standOn)
+        local myRoot = GetRoot(LP)
+        if not base or not myRoot then return end
+        local top = base.Position + Vector3.new(0, height, 0)
+        applyRootCF(myRoot, CFrame.new(top), base)
+    end)
+end
+
+local function cmd_rline(name)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    local root = GetRoot(p)
+    if not root then return end
+    StopAll()
+    local idx = select(1, GetAltIndex())
+    TeleportOnce(root.CFrame * CFrame.new(idx * 2.4, 0, 0))
+end
+
+local function cmd_lline(name)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    local root = GetRoot(p)
+    if not root then return end
+    StopAll()
+    local idx = select(1, GetAltIndex())
+    TeleportOnce(root.CFrame * CFrame.new(-idx * 2.4, 0, 0))
+end
+
+local function cmd_bline(name)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    local root = GetRoot(p)
+    if not root then return end
+    StopAll()
+    local idx = select(1, GetAltIndex())
+    TeleportOnce(root.CFrame * CFrame.new(0, 0, idx * 2.4))
+end
+
+local function cmd_stalk(name)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    StopAll()
+    local conn = RunService.Heartbeat:Connect(function()
+        local root = GetRoot(p)
+        local myRoot = GetRoot(LP)
+        if not root or not myRoot then return end
+        local dist = (root.Position - myRoot.Position).Magnitude
+        if dist > 25 then
+            local ang = math.random() * math.pi * 2
+            local distBehind = math.random(4, 9)
+            local offset = Vector3.new(math.cos(ang) * 2, 0, math.sin(ang) * 2)
+            local pos = root.Position - root.CFrame.LookVector * distBehind + offset
+            TeleportOnce(CFrame.lookAt(pos, root.Position))
+        else
+            myRoot.CFrame = CFrame.lookAt(myRoot.Position, Vector3.new(root.Position.X, myRoot.Position.Y, root.Position.Z))
+        end
+    end)
+    ActiveLoops["stalk"] = conn
+end
+
+local function cmd_wonder()
+    StopAll()
+    local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+    local root = GetRoot(LP)
+    if not hum or not root then return end
+    local conn = RunService.Heartbeat:Connect(function()
+        if not root or not root.Parent or not hum.Parent then return end
+        if math.random() < 0.02 then
+            hum:MoveTo(root.Position + Vector3.new(math.random(-30, 30), 0, math.random(-30, 30)))
+        end
+    end)
+    ActiveLoops["wonder"] = conn
+end
+
+local function cmd_fwonder()
+    StopAll()
+    SetNoclip(true)
+    local root = GetRoot(LP)
+    if not root then return end
+    local pos = root.Position + Vector3.new(0, 8, 0)
+    local conn = RunService.Heartbeat:Connect(function()
+        if not root or not root.Parent then return end
+        if math.random() < 0.025 then
+            pos = root.Position + Vector3.new(math.random(-25, 25), math.random(4, 14), math.random(-25, 25))
+        end
+        root.CFrame = root.CFrame:Lerp(CFrame.new(pos), 0.08)
+        root.AssemblyLinearVelocity = Vector3.zero
+    end)
+    ActiveLoops["fwonder"] = conn
+end
+
+local SavedHipHeight = nil
+
+local function cmd_float(h)
+    h = tonumber(h) or 2
+    StopAll()
+    local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+    if hum then
+        if SavedHipHeight == nil then
+            SavedHipHeight = hum.HipHeight
+        end
+        pcall(function() hum.HipHeight = h end)
+    end
+end
+
+local function cmd_unfloat()
+    local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+    if hum then
+        pcall(function()
+            hum.HipHeight = SavedHipHeight or 2
+        end)
+    end
+    SavedHipHeight = nil
+end
+
+local function cmd_spin(spd)
+    spd = tonumber(spd) or 5
+    StopAll()
+    local root = GetRoot(LP)
+    if not root then return end
+    local angle = 0
+    local conn = RunService.Heartbeat:Connect(function(dt)
+        if not root or not root.Parent then return end
+        angle = angle + spd * dt * 2
+        root.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, angle, 0)
+        root.AssemblyLinearVelocity = Vector3.zero
+    end)
+    ActiveLoops["spin"] = conn
+end
+
+local function cmd_fling(name)
+    local p = FindPlayer(name)
+    if not p then return end
+    local root = GetRoot(p)
+    if not root then return end
+    StopAll()
+    SetNoclip(true)
+    CurrentWeld = WeldTo(root, function()
+        return CFrame.new(0, 0, 1.2)
+    end)
+    local myRoot = GetRoot(LP)
+    local boost = RunService.Heartbeat:Connect(function()
+        if myRoot and myRoot.Parent then
+            myRoot.AssemblyLinearVelocity = Vector3.new(math.random(-90, 90), math.random(60, 140), math.random(-90, 90))
+            myRoot.AssemblyAngularVelocity = Vector3.new(25, 25, 25)
+        end
+    end)
+    ActiveLoops["flingboost"] = boost
+end
+
+local function cmd_flingall()
+    StopAll()
+    SetNoclip(true)
+    local myRoot = GetRoot(LP)
+    if not myRoot then return end
+    local target = nil
+    local stickUntil = 0
+
+    local function pickTarget()
+        local others = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LP and not S.altAccounts[plr.Name] and plr.Name ~= S.mainAccount and GetRoot(plr) then
+                table.insert(others, plr)
+            end
+        end
+        if #others == 0 then return nil end
+        return others[math.random(1, #others)]
+    end
+
+    target = pickTarget()
+    stickUntil = tick() + 2.5
+
+    local boost = RunService.Heartbeat:Connect(function()
+        myRoot = GetRoot(LP)
+        if not myRoot then return end
+        if not target or not target.Parent or not GetRoot(target) or tick() > stickUntil then
+            target = pickTarget()
+            stickUntil = tick() + 2.5
+        end
+        local tr = target and GetRoot(target)
+        if tr then
+            myRoot.CFrame = tr.CFrame * CFrame.new(0, 0, 1)
+            myRoot.AssemblyLinearVelocity = Vector3.new(math.random(-200, 200), math.random(90, 220), math.random(-200, 200))
+            myRoot.AssemblyAngularVelocity = Vector3.new(50, 50, 50)
+        end
+    end)
+    ActiveLoops["flingall"] = boost
+end
+
+local function cmd_fling2(name)
+    local p = FindPlayer(name)
+    if not p then return end
+    local root = GetRoot(p)
+    if not root then return end
+    StopAll()
+    SetNoclip(true)
+    local t = 0
+    CurrentWeld = WeldTo(root, function()
+        t = t + 0.25
+        local y = math.sin(t * 8) * 12
+        return CFrame.new(0, y, 1.5) * CFrame.Angles(t * 20, t * 15, 0)
+    end)
+    local myRoot = GetRoot(LP)
+    local boost = RunService.Heartbeat:Connect(function()
+        if myRoot and myRoot.Parent then
+            myRoot.AssemblyLinearVelocity = Vector3.new(math.random(-40, 40), math.sin(t * 8) * 120, math.random(-40, 40))
+            myRoot.AssemblyAngularVelocity = Vector3.new(20, 20, 20)
+        end
+    end)
+    ActiveLoops["fling2boost"] = boost
+end
+
+local function cmd_firework()
+    StopAll()
+    SetNoclip(true)
+    local root = GetRoot(LP)
+    if not root then return end
+    local angle = 0
+    local conn = RunService.Heartbeat:Connect(function(dt)
+        if not root or not root.Parent then return end
+        angle = angle + 25 * dt
+        root.CFrame = CFrame.new(root.Position) * CFrame.Angles(angle, angle * 0.7, 0)
+        root.AssemblyLinearVelocity = Vector3.new(0, 140, 0)
+        root.AssemblyAngularVelocity = Vector3.new(20, 20, 20)
+    end)
+    ActiveLoops["firework"] = conn
+    task.delay(1.4, function()
+        if ActiveLoops["firework"] then
+            ActiveLoops["firework"]:Disconnect()
+            ActiveLoops["firework"] = nil
+        end
+        pcall(function()
+            if LP.Character then LP.Character:BreakJoints() end
+        end)
+    end)
+end
+
+local function cmd_nuke(name)
+    local p = FindPlayer(name)
+    if not p then return end
+    local root = GetRoot(p)
+    if not root then return end
+    StopAll()
+    SetNoclip(true)
+    CurrentWeld = WeldTo(root, function()
+        return CFrame.new(0, 50, 0)
+    end)
+    task.delay(0.55, function()
+        if CurrentWeld then
+            CurrentWeld:Destroy()
+            CurrentWeld = nil
+        end
+        local myRoot = GetRoot(LP)
+        if myRoot and root then
+            myRoot.CFrame = root.CFrame
+            myRoot.AssemblyLinearVelocity = Vector3.new(math.random(-90, 90), -200, math.random(-90, 90))
+        end
+        task.wait(0.25)
+        pcall(function()
+            if LP.Character then LP.Character:BreakJoints() end
+        end)
+        local exp = Instance.new("Explosion")
+        exp.Position = root.Position
+        exp.BlastRadius = 20
+        exp.BlastPressure = 500000
+        exp.Parent = workspace
+    end)
+end
+
+local function cmd_elevator(name)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    if not GetRoot(p) then return end
+    StopAll()
+    SetNoclip(true)
+    local idx, total = GetAltIndex()
+    total = math.max(total, 1)
+    local cols = math.ceil(math.sqrt(total))
+    local row = math.floor((idx - 1) / cols)
+    local col = (idx - 1) % cols
+    local spacing = 3.2
+    local ox = (col - (cols - 1) / 2) * spacing
+    local oz = (row - (cols - 1) / 2) * spacing
+    local lay = CFrame.Angles(math.rad(-90), 0, 0)
+    local lift = 0
+    pcall(function()
+        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+        if hum then
+            hum.AutoRotate = false
+            hum.PlatformStand = true
+        end
+    end)
+    -- HRP loop + PhysicsRepRootPart (hidden root) so you ride them as a platform
+    ActiveLoops.elevator = RunService.Heartbeat:Connect(function()
+        local targetRoot = GetRoot(p)
+        local myRoot = GetRoot(LP)
+        if not targetRoot or not myRoot then return end
+        lift = math.min(lift + 0.06, 35)
+        local pos = targetRoot.Position + Vector3.new(ox, -2.8 + lift, oz)
+        applyRootCF(myRoot, CFrame.new(pos) * lay, targetRoot)
+    end)
+end
+
+local function cmd_mine(name)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    StopAll()
+    SetNoclip(true)
+    MineMode = true
+    local char = LP.Character
+    local head = char and char:FindFirstChild("Head")
+    local myRoot = GetRoot(LP)
+    if not myRoot then return end
+    local baseY = 0.5
+    pcall(function()
+        local bp = workspace:FindFirstChild("Baseplate") or workspace:FindFirstChildWhichIsA("BasePart")
+        if bp then
+            baseY = bp.Position.Y + bp.Size.Y / 2 + 0.4
+        end
+    end)
+    local ang = math.random() * math.pi * 2
+    local dist = 8 + math.random() * 17
+    local ox = math.cos(ang) * dist
+    local oz = math.sin(ang) * dist
+    local connPos = RunService.Heartbeat:Connect(function()
+        local targetRoot = GetRoot(p)
+        if not targetRoot or not myRoot or not myRoot.Parent then return end
+        myRoot.CFrame = CFrame.new(targetRoot.Position.X + ox, baseY - 1.2, targetRoot.Position.Z + oz)
+        myRoot.AssemblyLinearVelocity = Vector3.zero
+    end)
+    ActiveLoops["minepos"] = connPos
+    if head then
+        local touchConn
+        touchConn = head.Touched:Connect(function(hit)
+            if not MineMode then return end
+            local other = Players:GetPlayerFromCharacter(hit.Parent)
+            if other and other ~= LP and not S.altAccounts[other.Name] then
+                MineMode = false
+                if touchConn then touchConn:Disconnect() end
+                pcall(function()
+                    if char then char:BreakJoints() end
+                end)
+                local exp = Instance.new("Explosion")
+                exp.Position = head.Position
+                exp.BlastRadius = 14
+                exp.BlastPressure = 0
+                exp.Parent = workspace
+            end
+        end)
+        ActiveLoops["mine"] = touchConn
+    end
+end
+
+local NPC_LINES = {
+    "have you seen my hat",
+    "is that a hacker",
+    "I THINK I JUST SAW JOHN DOE",
+    "where am i",
+    "did you hear that",
+    "this place is weird",
+    "who are you people",
+    "I dropped my robux",
+    "is this the real life",
+    "someone help me",
+    "I saw a shadow move",
+    "do you sell limiteds",
+    "why is the sky like that",
+    "I think im lost",
+    "was that a gunshot",
+    "my friend disappeared",
+    "can you hear the music",
+    "this feels unsafe",
+    "I need a medkit",
+    "are we in a dream",
+    "JOHN DOE IS REAL",
+    "please dont ban me",
+    "I just want to go home",
+    "who turned off the lights",
+    "something is following me",
+    "I found a secret door",
+    "the walls are breathing",
+    "has anyone seen my dog",
+    "why is everyone staring",
+    "I think I glitched",
+    "i love this game",
+    "anyone want to be friends",
+    "this is my favorite map",
+    "wait who are you",
+    "can someone trade me",
+    "i just started playing",
+    "is this place safe",
+    "help im stuck",
+    "did the update drop yet",
+    "free robux is a scam",
+    "my mom said five more minutes",
+    "why is everyone so fast",
+    "i saw something in the corner",
+    "dont look behind you",
+    "is john doe in this server",
+    "who keeps saying that",
+    "i lost my limited",
+    "can i join your crew",
+    "this server feels cursed",
+    "why did the lights flicker",
+    "i hear footsteps",
+    "stop following me",
+    "ok that was weird",
+    "did you see that guy vanish",
+    "i need a snack break",
+    "brb eating",
+    "lag is crazy right now",
+    "my wifi is dying",
+    "who invited me here",
+    "is this an event",
+    "cool avatar",
+    "nice fit",
+    "where do i get that item",
+    "tutorial when",
+    "im so confused",
+    "ok ok i get it now",
+    "wait no i dont",
+    "someone explain the rules",
+    "are we speedrunning",
+    "race you to the top",
+    "last one there is a loser",
+    "i claim this spot",
+    "no griefing please",
+    "friendly only",
+    "pvp later maybe",
+    "afk for a sec",
+    "back",
+    "missed anything",
+    "what happened",
+    "oh no",
+    "run",
+    "hide",
+    "they found us",
+    "false alarm",
+    "nevermind",
+    "ok serious question",
+    "does anyone actually read chat",
+    "hello is this thing on",
+    "testing testing",
+    "wow ok chat works",
+}
+
+local function cmd_npc()
+    NpcMode = true
+    StopAll()
+    local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+    local root = GetRoot(LP)
+    if hum then
+        hum.WalkSpeed = 8
+        hum.JumpPower = 30
+    end
+    local nextChat = tick() + math.random(3, 7)
+    local nextWalk = tick() + 1
+    local conn = RunService.Heartbeat:Connect(function()
+        if not NpcMode then return end
+        root = GetRoot(LP)
+        hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+        if root and hum and hum.Parent and tick() > nextWalk then
+            nextWalk = tick() + math.random(2, 5)
+            hum:MoveTo(root.Position + Vector3.new(math.random(-22, 22), 0, math.random(-22, 22)))
+        end
+        if tick() > nextChat then
+            nextChat = tick() + math.random(5, 12)
+            Say(NPC_LINES[math.random(1, #NPC_LINES)])
+        end
+    end)
+    ActiveLoops["npc"] = conn
+end
+
+local function cmd_unnpc()
+    NpcMode = false
+    if ActiveLoops["npc"] then
+        ActiveLoops["npc"]:Disconnect()
+        ActiveLoops["npc"] = nil
+    end
+    local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+    if hum then
+        hum.WalkSpeed = 16
+        hum.JumpPower = 50
+    end
+end
+
+local function cmd_dance1() Say("/e dance1") end
+local function cmd_dance2() Say("/e dance2") end
+local function cmd_dance3() Say("/e dance3") end
+local function cmd_point() Say("/e point") end
+local function cmd_cheer() Say("/e cheer") end
+local function cmd_wave() Say("/e wave") end
+local function cmd_laugh() Say("/e laugh") end
+
+local function cmd_spam(msg)
+    if not msg or msg == "" then return end
+    StopAll()
+    local th = task.spawn(function()
+        while true do
+            Say(msg)
+            task.wait(MoveSettings.SpamSpeed)
+        end
+    end)
+    ActiveLoops["spam"] = th
+end
+
+local function cmd_unspam()
+    if ActiveLoops["spam"] then
+        pcall(task.cancel, ActiveLoops["spam"])
+        ActiveLoops["spam"] = nil
+    end
+end
+
+local function cmd_orbitspeed(v)
+    v = tonumber(v)
+    if v and v >= 0.1 and v <= 20 then MoveSettings.OrbitSpeed = v end
+end
+local function cmd_orbitradius(v)
+    v = tonumber(v)
+    if v and v >= 2 and v <= 80 then MoveSettings.OrbitRadius = v end
+end
+local function cmd_spiralspeed(v)
+    v = tonumber(v)
+    if v and v >= 0.1 and v <= 20 then MoveSettings.SpiralSpeed = v end
+end
+local function cmd_spiralradius(v)
+    v = tonumber(v)
+    if v and v >= 2 and v <= 60 then MoveSettings.SpiralRadius = v end
+end
+local function cmd_helicopterspeed(v)
+    v = tonumber(v)
+    if v and v >= 0.1 and v <= 20 then MoveSettings.HelicopterSpeed = v end
+end
+local function cmd_helicopterradius(v)
+    v = tonumber(v)
+    if v and v >= 2 and v <= 40 then MoveSettings.HelicopterRadius = v end
+end
+local function cmd_spamspeed(v)
+    v = tonumber(v)
+    if v and v >= 0.15 then MoveSettings.SpamSpeed = v end
+end
+
+local function cmd_check()
+    local idx = select(1, GetAltIndex())
+    Say("i am bot #" .. tostring(idx))
+end
+
+local function cmd_totalcmds()
+    local count = 0
+    for _ in pairs(Commands) do count += 1 end
+    Say("commands: " .. count)
+end
+
+local function cmd_credits()
+    Say("Schweins Alt Control")
+end
+
+local function cmd_clone(name)
+    if not name or name == "" then
+        Say("usage: .clone displayname-or-abbreviation")
+        return
+    end
+
+    local target = FindPlayer(name)
+    if not target then
+        Say("clone target not found: " .. tostring(name))
+        return
+    end
+
+    local userId = target.UserId
+    local cloneRemote = ReplicatedStorage:FindFirstChild("event_clone_avatar")
+    local profileRemote = ReplicatedStorage:FindFirstChild("ProfileAvatarRemote")
+
+    -- Each supported game exposes one of these remotes. Only try the second
+    -- remote when the first is missing or cannot be fired.
+    local cloned = false
+    if cloneRemote and cloneRemote:IsA("RemoteEvent") then
+        cloned = pcall(function()
+            cloneRemote:FireServer(userId)
+        end)
+    end
+
+    if not cloned and profileRemote and profileRemote:IsA("RemoteEvent") then
+        cloned = pcall(function()
+            profileRemote:FireServer("CopyAvatar", userId)
+        end)
+    end
+
+    if not cloned then
+        Say("clone failed: this game has no supported avatar remote")
+    end
+end
+
+local CMD_INFO = {
+    adduser = "lets that player run commands too. they still cant kick your real main",
+    removeuser = "takes command perms away from someone. wont touch your main account",
+    chat = "makes the alt say whatever you type after it",
+    sit = "sits the alt down",
+    jump = "makes the alt jump once",
+    re = "breaks joints so the alt resets soft",
+    forcereset = "hard kills the alt character",
+    quit = "shuts the whole client down",
+    bring = "yanks every alt right on top of you",
+    goto = "sends the alt to that player",
+    follow = "alt walks after the target",
+    walkto = "same as follow",
+    pf = "pathfinds to the target instead of walking dumb",
+    circle = "parks alts in a ring. .circle 10 or .circle player 10",
+    orbit = "alts orbit the target and face inward with the hidden root lock",
+    orbit2 = "alts arch over the target like / and \\ curves",
+    orbit3 = "full 3d sphere orbit around the target",
+    spiral = "wavy spiral around the target",
+    spiral2 = "spiral but half the alts spin the other way",
+    helicopter = "alts lay flat on your head and spin like rotor blades",
+    swarm = "alts keep wandering near the target",
+    swarm2 = "flying swarm that drifts around the target",
+    worm = "lines alts up behind the target",
+    stackon = "stacks alts on top of the target",
+    rline = "line up on the right",
+    lline = "line up on the left",
+    bline = "line up behind",
+    stalk = "creeps behind the target and stares",
+    wonder = "random walking around",
+    fwonder = "floating random wandering",
+    float = "raises hip height. .float 4 etc",
+    unfloat = "puts hip height back to normal",
+    spin = "spins the alt in place",
+    fling = "locks to their back with hidden root and yeets them",
+    fling2 = "bouncy back-attach fling",
+    flingall = "each alt grabs a random non-alt and flings them",
+    firework = "launches up spinning then pops",
+    nuke = "dives on someone and explodes",
+    elevator = "alts form a rising floor under the target",
+    mine = "plants alts nearby in a 25 stud ring as proximity mines",
+    npc = "wanders and says random npc lines in chat",
+    unnpc = "stops npc mode",
+    dance1 = "types /e dance1",
+    dance2 = "types /e dance2",
+    dance3 = "types /e dance3",
+    point = "types /e point",
+    cheer = "types /e cheer",
+    wave = "types /e wave",
+    laugh = "types /e laugh",
+    spam = "spams a message. .spam hello",
+    unspam = "stops spam",
+    mute = "mutes local voice",
+    unmute = "unmutes local voice",
+    avcb = "anti vc ban attempt. needs a real executor not xeno",
+    check = "alt says which bot number it is",
+    clone = "copies a player's avatar. .clone displayname-or-abbreviation",
+    stop = "kills every active loop and weld",
+    setup = "music setup ring for the queue bot",
+    stopmusic = "stops music loops",
+    orbitspeed = "sets orbit spin speed",
+    orbitradius = "sets orbit radius",
+    spiralspeed = "sets spiral speed",
+    spiralradius = "sets spiral radius",
+    helicopterspeed = "sets heli spin speed",
+    helicopterradius = "sets heli blade radius",
+    spamspeed = "sets delay between spam messages",
+    ksetup = "kahoot bots line up in front of you",
+    kstart = "start kahoot. .kstart movies 10 or .kstart 15",
+    kstop = "stop the kahoot round after current question",
+    kclear = "clear kahoot scores",
+    kthemes = "list kahoot themes",
+    kend = "shut down kahoot bots",
+}
+
+local function cmd_info(name)
+    if not name or name == "" then
+        Say("try .info orbit or .info bring")
+        return
+    end
+    name = tostring(name):lower()
+    local desc = CMD_INFO[name]
+    if desc then
+        Say(name .. " - " .. desc)
+    else
+        Say("no info for " .. name)
+    end
+end
+
+local currentHost = Players:FindFirstChild(S.mainAccount) or LP
+local isSetupActive = false
+local voteSkipActive = false
+local voteSkipUsedForCurrent = false
+local currentVotes = { yes = {}, no = {} }
+local lastKnownSong = nil
+local statusCheckLoop = nil
+local queueWebhookLoop = nil
+local reminderLoop = nil
+
+local function sendToWebhook(msg)
+    if not isQueueBot then return end
+    local data = { content = msg, username = "Music Bot" }
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if req then
+        pcall(function()
+            req({
+                Url = S.WEBHOOK_URL,
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = HttpService:JSONEncode(data),
+            })
+        end)
+    end
+end
+
+local function sendToFlask(endpoint, data)
+    if not isQueueBot then return nil end
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if not req then return nil end
+    local opts = {
+        Url = S.FLASK_API_URL .. endpoint,
+        Method = data and "POST" or "GET",
+        Headers = { ["Content-Type"] = "application/json" },
+    }
+    if data then opts.Body = HttpService:JSONEncode(data) end
+    local ok, resp = pcall(req, opts)
+    if ok and resp and resp.Body then
+        local s, d = pcall(HttpService.JSONDecode, HttpService, resp.Body)
+        if s then return d end
+    end
+    return nil
+end
+
+local function getQueue()
+    return sendToFlask("/queue") or { queue = {}, current = nil, current_title = nil, next = nil }
+end
+
+local function getStatus()
+    if not isAlt and not isQueueBot then return nil end
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if not req then return nil end
+    local ok, resp = pcall(req, {
+        Url = S.FLASK_API_URL .. "/status",
+        Method = "GET",
+    })
+    if ok and resp and resp.Body then
+        local s, d = pcall(HttpService.JSONDecode, HttpService, resp.Body)
+        if s then return d end
+    end
+    return nil
+end
+
+local function sendQueueToWebhook()
+    if not isQueueBot then return end
+    local data = getQueue()
+    local queueList = data.queue or {}
+    local current = data.current
+    local currentTitle = data.current_title
+    local nextSong = data.next
+    if #queueList == 0 and not current then
+        sendToWebhook("Music Queue: Empty")
+        return
+    end
+    local queueText = "Music Queue:\n\n"
+    if current then
+        if currentTitle then
+            queueText = queueText .. "Now Playing: " .. tostring(currentTitle) .. "\n"
+        else
+            queueText = queueText .. "Now Playing: " .. tostring(current) .. "\n"
+        end
+    else
+        queueText = queueText .. "Now Playing: Nothing\n"
+    end
+    if nextSong then
+        queueText = queueText .. "Next: " .. tostring(nextSong) .. "\n"
+    end
+    if #queueList > 1 then
+        queueText = queueText .. "\nUp Next (" .. (#queueList - 1) .. "):\n"
+        for i = 2, math.min(#queueList, 6) do
+            queueText = queueText .. tostring(i - 1) .. ". " .. tostring(queueList[i]) .. "\n"
+        end
+        if #queueList > 6 then
+            queueText = queueText .. "... and " .. (#queueList - 6) .. " more\n"
+        end
+    end
+    sendToWebhook(queueText)
+end
+
+local function startMusicLoops()
+    if isQueueBot and not queueWebhookLoop then
+        queueWebhookLoop = task.spawn(function()
+            while isSetupActive do
+                task.wait(S.QUEUE_WEBHOOK_INTERVAL or 30)
+                if isSetupActive then
+                    sendQueueToWebhook()
+                end
+            end
+            queueWebhookLoop = nil
+        end)
+    end
+    if isAlt and not statusCheckLoop then
+        statusCheckLoop = task.spawn(function()
+            while isSetupActive do
+                task.wait(S.STATUS_CHECK_INTERVAL or 2)
+                if isSetupActive then
+                    local status = getStatus()
+                    if status and status.current_title then
+                        if status.current_title ~= lastKnownSong then
+                            lastKnownSong = status.current_title
+                            voteSkipUsedForCurrent = false
+                            -- only one random alt announces (stable pick from song title)
+                            local alts = {}
+                            for _, plr in ipairs(Players:GetPlayers()) do
+                                if S.altAccounts[plr.Name] then
+                                    table.insert(alts, plr.Name)
+                                end
+                            end
+                            table.sort(alts)
+                            if #alts > 0 then
+                                local h = 0
+                                local title = tostring(status.current_title)
+                                for i = 1, #title do
+                                    h = (h * 31 + string.byte(title, i)) % 2147483647
+                                end
+                                local pick = alts[(h % #alts) + 1]
+                                if LP.Name == pick then
+                                    Say("Now Playing: " .. title)
+                                end
+                            elseif isQueueBot then
+                                Say("Now Playing: " .. tostring(status.current_title))
+                            end
+                        end
+                    elseif status and not status.current_title and lastKnownSong then
+                        lastKnownSong = nil
+                    end
+                end
+            end
+            statusCheckLoop = nil
+        end)
+    end
+    -- only main account reminds, every 5 minutes
+    if isMain and not reminderLoop then
+        reminderLoop = task.spawn(function()
+            while isSetupActive do
+                task.wait(S.REMINDER_INTERVAL or 300)
+                if isSetupActive then
+                    Say("Type /play [song] near the music bot to queue")
+                end
+            end
+            reminderLoop = nil
+        end)
+    end
+end
+
+local function stopMusicLoops()
+    isSetupActive = false
+    queueWebhookLoop = nil
+    statusCheckLoop = nil
+    reminderLoop = nil
+    lastKnownSong = nil
+end
+
+local function isPlayerInRange(player)
+    local bot = Players:FindFirstChild(S.queueBot) or Players:FindFirstChild(S.mainAccount) or currentHost
+    if not bot or not bot.Character then return false end
+    local hr = bot.Character:FindFirstChild("HumanoidRootPart")
+    if not hr then return false end
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return false end
+    return (hr.Position - player.Character.HumanoidRootPart.Position).Magnitude <= (S.PROXIMITY_RANGE or 10)
+end
+
+local function setupPlayers()
+    if not currentHost or not currentHost.Character then return end
+    local hostRoot = currentHost.Character:FindFirstChild("HumanoidRootPart")
+    if not hostRoot then return end
+    local participants = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= currentHost and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            table.insert(participants, p)
+        end
+    end
+    if #participants == 0 then
+        if isQueueBot then Say("no players to setup") end
+        return
+    end
+    local hostCF = hostRoot.CFrame
+    local forward = hostCF.LookVector
+    local center = hostCF.Position + forward * (S.SETUP_DISTANCE or 8)
+    local radius = (S.SETUP_DISTANCE or 8) * 0.8
+    local spread = math.pi * 0.75
+    local step = spread / math.max(#participants - 1, 1)
+    local start = -spread / 2
+    for i, p in ipairs(participants) do
+        local ang = start + step * (i - 1)
+        local ox = math.sin(ang) * radius
+        local oz = math.cos(ang) * radius
+        local pos = center + hostCF.RightVector * ox + forward * oz
+        local look = CFrame.lookAt(pos, center)
+        if p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            p.Character.HumanoidRootPart.CFrame = look
+        end
+    end
+    if isQueueBot then
+        Say("setup complete " .. #participants)
+    end
+    isSetupActive = true
+    startMusicLoops()
+end
+
+local KahootRole = nil
+local KahootActive = true
+local KahootQuestions = {}
+local KahootTheme = "general"
+local KahootGameActive = false
+local KahootStoppedEarly = false
+local KahootScores = {}
+local KahootAnswers = {}
+local KahootQStart = 0
+local KahootPerch = nil
+local KahootCurrentQ = nil
+local KahootDancing = false
+
+do
+    local bots = S.kahootBots or {}
+    for i, botName in ipairs(bots) do
+        if LP.Name:lower() == tostring(botName):lower() then
+            if i == 1 then KahootRole = "host"
+            elseif i == 2 then KahootRole = "answer1"
+            elseif i == 3 then KahootRole = "answer2"
+            elseif i == 4 then KahootRole = "answer3"
+            elseif i == 5 then KahootRole = "answer4"
+            elseif i == 6 then KahootRole = "scoreboard"
+            end
+            break
+        end
+    end
+end
+
+local function KahootParseBody(body)
+    if not body or body == "" then return nil end
+    -- pure JSON array/object
+    local okJ, decoded = pcall(function()
+        return HttpService:JSONDecode(body)
+    end)
+    if okJ and type(decoded) == "table" then
+        if decoded.questions then return decoded.questions end
+        if decoded[1] and type(decoded[1]) == "table" then return decoded end
+        return decoded
+    end
+    -- lua table returned from loadstring
+    local okL, result = pcall(function()
+        return loadstring(body)()
+    end)
+    if okL and type(result) == "table" then return result end
+    return nil
+end
+
+local function KahootLoadQuestions(gistURL)
+    local themes = S.kahootThemes or {}
+    if gistURL == "COMBINED" then
+        local combined = {}
+        for themeName, url in pairs(themes) do
+            if themeName ~= "all" and url ~= "COMBINED" then
+                local ok, body = pcall(function()
+                    return game:HttpGet(url)
+                end)
+                if ok then
+                    local result = KahootParseBody(body)
+                    if type(result) == "table" then
+                        for _, q in pairs(result) do
+                            if type(q) == "table" and q.q then
+                                table.insert(combined, q)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if #combined > 0 then return combined end
+        return {{q = "No themes loaded", a = {"Check", "Your", "Gist", "URLs"}, c = 1}}
+    end
+    local ok, body = pcall(function()
+        return game:HttpGet(gistURL)
+    end)
+    if ok then
+        local result = KahootParseBody(body)
+        if type(result) == "table" and #result > 0 then return result end
+        if type(result) == "table" then
+            local arr = {}
+            for _, q in pairs(result) do
+                if type(q) == "table" and q.q then table.insert(arr, q) end
+            end
+            if #arr > 0 then return arr end
+        end
+    end
+    return {{q = "Gist Link Missing/Failed", a = {"Check", "The", "Link", "Again"}, c = 1}}
+end
+
+pcall(function()
+    local themes = S.kahootThemes or {}
+    if themes.general then
+        KahootQuestions = KahootLoadQuestions(themes.general)
+    end
+end)
+
+local function KahootTeleport(cf)
+    if not KahootActive then return end
+    local root = GetRoot(LP)
+    if not root then return end
+    root.CFrame = cf
+    if KahootRole == "scoreboard" then
+        local existing = workspace:FindFirstChild(LP.Name .. "_Platform")
+        if existing then existing:Destroy() end
+        if cf.Position.Y > 5 then
+            task.wait(0.1)
+            local plat = Instance.new("Part")
+            plat.Name = LP.Name .. "_Platform"
+            plat.Size = Vector3.new(6, 1, 6)
+            plat.CFrame = CFrame.new(cf.Position - Vector3.new(0, 3.5, 0))
+            plat.Transparency = 1
+            plat.Anchored = true
+            plat.CanCollide = true
+            plat.Parent = workspace
+        end
+    end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(10)
+        if KahootDancing and KahootActive then
+            if KahootRole == "host" then
+                Say("/e dance3")
+            elseif KahootRole == "scoreboard" then
+                Say("/e dance2")
+            end
+        end
+    end
+end)
+
+local function KahootResetStats()
+    KahootScores = {}
+    KahootAnswers = {}
+    KahootCurrentQ = nil
+end
+
+local function KahootCelebrate()
+    if KahootRole ~= "scoreboard" or not KahootActive then return end
+    KahootDancing = false
+    local s = {}
+    for name, score in pairs(KahootScores) do
+        table.insert(s, {n = name, s = score})
+    end
+    table.sort(s, function(a, b) return a.s > b.s end)
+    if #s == 0 then
+        if KahootPerch then KahootTeleport(KahootPerch) task.wait(0.5) end
+        KahootDancing = true
+        Say("/e dance2")
+        return
+    end
+    task.wait(1.5)
+    Say("FINAL RESULTS")
+    task.wait(2)
+    for i, pd in ipairs(s) do
+        if not KahootActive then return end
+        if i == 1 then
+            Say(pd.n .. " got 1st place with " .. pd.s .. " points!")
+        elseif i == 2 then
+            Say(pd.n .. " got 2nd place with " .. pd.s .. " points!")
+        elseif i == 3 then
+            Say(pd.n .. " got 3rd place with " .. pd.s .. " points!")
+        else
+            Say(pd.n .. " got " .. i .. " place with " .. pd.s .. " points!")
+        end
+        task.wait(1)
+        local target = FindPlayer(pd.n)
+        if target then
+            local tRoot = GetRoot(target)
+            if tRoot then
+                KahootTeleport(CFrame.lookAt((tRoot.CFrame * CFrame.new(0, 0, -4)).Position, tRoot.Position))
+                task.wait(0.5)
+                Say("/e point")
+                task.wait(2)
+            end
+        else
+            task.wait(1.5)
+        end
+    end
+    task.wait(1)
+    Say("Thanks for playing everyone!")
+    task.wait(1.5)
+    if KahootPerch then KahootTeleport(KahootPerch) task.wait(0.5) end
+    KahootDancing = true
+    Say("/e dance2")
+    KahootResetStats()
+end
+
+local function KahootStartQuiz(length)
+    if KahootRole ~= "host" or not KahootActive then return end
+    KahootResetStats()
+    Say("SCHWEIN_KCLEAR")
+    task.wait(0.5)
+    KahootGameActive = true
+    KahootDancing = false
+    local rounds = length and math.clamp(tonumber(length) or #KahootQuestions, 1, #KahootQuestions) or #KahootQuestions
+    local used = {}
+    Say("Welcome to Schweins Kahoot!")
+    task.wait(3)
+    Say("Introduce yourself bots")
+    task.wait(32)
+    local themeText = (KahootTheme == "all") and "mixed" or KahootTheme
+    Say("Beginning " .. rounds .. " rounds of " .. themeText .. " questions!")
+    task.wait(2)
+    for i = 1, rounds do
+        if not KahootGameActive or not KahootActive then break end
+        local pick
+        repeat pick = math.random(1, #KahootQuestions) until not used[pick]
+        used[pick] = true
+        local q = KahootQuestions[pick]
+        Say("Question " .. i .. ": " .. q.q)
+        task.wait(2)
+        Say(".options")
+        task.wait(10)
+        Say("The correct answer was Option " .. q.c .. ": " .. q.a[q.c])
+        task.wait(3)
+        Say(".score")
+        task.wait(4)
+    end
+    if KahootGameActive or KahootStoppedEarly then
+        Say("THE QUIZ HAS ENDED!")
+        KahootStoppedEarly = false
+        KahootDancing = true
+    end
+    KahootGameActive = false
+end
+
+function cmd_ksetup()
+    local main = Players:FindFirstChild(S.mainAccount) or LP
+    local char = main.Character
+    if not char then return end
+    local mroot = char:FindFirstChild("HumanoidRootPart")
+    if not mroot then return end
+    local root = mroot.CFrame
+    local targetPos = (root * CFrame.new(0, 0, -15)).Position
+    local lookAtOwner = CFrame.lookAt(targetPos, root.Position)
+    if KahootRole == "host" then
+        KahootTeleport(lookAtOwner * CFrame.new(-16, 0, 0))
+        KahootDancing = true
+    elseif KahootRole and KahootRole:find("answer") then
+        local bIdx = tonumber(KahootRole:match("%d+"))
+        local xOffset = -16 + (bIdx * 8)
+        KahootTeleport(lookAtOwner * CFrame.new(xOffset, 0, 0))
+    elseif KahootRole == "scoreboard" then
+        KahootPerch = lookAtOwner * CFrame.new(0, 10, 6)
+        KahootTeleport(KahootPerch)
+        KahootDancing = true
+        Say("/e dance2")
+    end
+end
+
+function cmd_kstart(themeOrRounds, maybeRounds)
+    -- wipe scores on every bot so scoreboard starts clean
+    KahootResetStats()
+    KahootGameActive = false
+    local theme, rounds = nil, nil
+    if themeOrRounds and tonumber(themeOrRounds) then
+        rounds = tonumber(themeOrRounds)
+    else
+        theme = themeOrRounds
+        rounds = tonumber(maybeRounds)
+    end
+    local themes = S.kahootThemes or {}
+    -- every kahoot bot loads the same questions so answer bots can speak options
+    if theme and themes[theme] then
+        KahootTheme = theme
+        KahootQuestions = KahootLoadQuestions(themes[theme])
+        if KahootRole == "host" then
+            Say("Loading " .. theme .. " (" .. tostring(#KahootQuestions) .. " q)...")
+            task.wait(1)
+        end
+    elseif theme then
+        if themes.general then
+            KahootQuestions = KahootLoadQuestions(themes.general)
+        end
+        if KahootRole == "host" then
+            Say("Theme not found. Using general.")
+            task.wait(1)
+        end
+    else
+        if themes.general and #(KahootQuestions or {}) < 2 then
+            KahootQuestions = KahootLoadQuestions(themes.general)
+        end
+    end
+    if KahootRole == "host" then
+        task.spawn(function() KahootStartQuiz(rounds) end)
+    elseif isMain and not KahootRole then
+        Say("kstart needs a host bot in kahootBots")
+    end
+end
+
+function cmd_kstop()
+    KahootGameActive = false
+    KahootStoppedEarly = true
+    if KahootRole == "host" then
+        KahootDancing = true
+    end
+end
+
+function cmd_kclear()
+    KahootResetStats()
+    if KahootRole == "scoreboard" then
+        Say("Scores have been cleared!")
+    elseif isMain and not KahootRole then
+        Say("SCHWEIN_KCLEAR")
+    end
+end
+
+function cmd_kthemes()
+    if not (isMain or KahootRole == "host") then return end
+    local themes = S.kahootThemes or {}
+    local list = "themes: "
+    for name, _ in pairs(themes) do
+        list = list .. name .. ", "
+    end
+    Say(list:sub(1, -3))
+end
+
+function cmd_kend()
+    KahootActive = false
+    KahootDancing = false
+    KahootGameActive = false
+    local plat = workspace:FindFirstChild(LP.Name .. "_Platform")
+    if plat then plat:Destroy() end
+    if KahootRole then Say("Bot shutting down...") end
+end
+
+local function KahootOnChat(player, message)
+    if not KahootActive then return end
+    task.spawn(function()
+        -- new game / explicit clear (works even when host bot isnt authorized)
+        if message == "SCHWEIN_KCLEAR" or message == ".kclear" or message == "Scores have been cleared!" then
+            KahootResetStats()
+            return
+        end
+        if message:find("Welcome to Schweins Kahoot") then
+            KahootResetStats()
+        end
+        if message:find("Question %d+:") then
+            for _, q in pairs(KahootQuestions) do
+                if message:find(q.q, 1, true) then
+                    KahootCurrentQ = q
+                    break
+                end
+            end
+        end
+        if message == ".options" then
+            KahootAnswers = {}
+            KahootQStart = tick()
+            if KahootRole and KahootRole:find("answer") then
+                local bIdx = tonumber(KahootRole:match("%d+"))
+                if KahootCurrentQ then
+                    task.wait(bIdx * 0.4)
+                    Say("Option " .. bIdx .. ": " .. KahootCurrentQ.a[bIdx])
+                end
+            end
+        end
+        if message == "Introduce yourself bots" then
+            local d = {answer1 = 5, answer2 = 10, answer3 = 15, answer4 = 20, scoreboard = 25}
+            if d[KahootRole] then
+                task.wait(d[KahootRole])
+                if KahootRole == "scoreboard" then
+                    Say("And I am the Scoreboard!")
+                else
+                    Say("I am Answer Bot " .. (KahootRole:match("%d+") or "") .. "!")
+                end
+                Say("/e wave")
+                if KahootRole == "scoreboard" then
+                    task.wait(5)
+                    KahootDancing = true
+                    Say("/e dance2")
+                end
+                if KahootRole == "host" then
+                    task.wait(1)
+                    KahootDancing = true
+                end
+            end
+        end
+        if KahootRole == "scoreboard" then
+            if message:find("The correct answer was Option") then
+                local correct = tonumber(message:match("Option (%d+)"))
+                local winners = {}
+                for name, data in pairs(KahootAnswers) do
+                    if data.ans == correct then
+                        table.insert(winners, {n = name, t = data.time})
+                    end
+                end
+                table.sort(winners, function(a, b) return a.t < b.t end)
+                for i, v in ipairs(winners) do
+                    KahootScores[v.n] = (KahootScores[v.n] or 0) + math.max(1, 11 - i)
+                end
+            elseif message == ".score" then
+                local s = {}
+                for name, score in pairs(KahootScores) do
+                    table.insert(s, {n = name, s = score})
+                end
+                table.sort(s, function(a, b) return a.s > b.s end)
+                if #s > 0 then
+                    local out = "Top 3: "
+                    for i = 1, math.min(3, #s) do
+                        out = out .. i .. ": " .. s[i].n .. " (" .. s[i].s .. ") "
+                    end
+                    Say(out)
+                end
+            elseif message:find("QUIZ HAS ENDED") then
+                KahootCelebrate()
+            else
+                local ansNum = tonumber(message)
+                if ansNum and ansNum >= 1 and ansNum <= 4 and not KahootAnswers[player.DisplayName] then
+                    KahootAnswers[player.DisplayName] = {ans = ansNum, time = tick() - KahootQStart}
+                end
+            end
+        end
+    end)
+end
+
+track(Players.PlayerAdded:Connect(function() end))
+for _, p in ipairs(Players:GetPlayers()) do
+    track(p.Chatted:Connect(function(msg)
+        KahootOnChat(p, msg)
+    end))
+end
+track(Players.PlayerAdded:Connect(function(p)
+    track(p.Chatted:Connect(function(msg)
+        KahootOnChat(p, msg)
+    end))
+end))
+
+
+local function cmd_sync(query)
+    if not query or tostring(query):gsub("%s+", "") == "" then
+        if isAlt then Say("usage: .sync name") end
+        return
+    end
+    local p = FindPlayer(query)
+    if not p then
+        if isAlt then Say("player not found") end
+        return
+    end
+    local uid = p.UserId
+    local ok = false
+    pcall(function()
+        local pg = LP:FindFirstChild("PlayerGui") or LP:WaitForChild("PlayerGui", 5)
+        if not pg then return end
+        local menu = pg:FindFirstChild("MenuGUI", true) or pg:WaitForChild("MenuGUI", 5)
+        if not menu then return end
+        local emote = menu:FindFirstChild("EmoteMenu", true) or menu:WaitForChild("EmoteMenu", 5)
+        if not emote then return end
+        local remote = emote:FindFirstChild("UnifiedSyncRequest", true)
+        if not remote then return end
+        if remote:IsA("BindableEvent") then
+            remote:Fire(uid)
+            ok = true
+        elseif remote:IsA("RemoteEvent") then
+            remote:FireServer(uid)
+            ok = true
+        else
+            pcall(function()
+                remote:Fire(uid)
+                ok = true
+            end)
+            if not ok then
+                pcall(function()
+                    remote:FireServer(uid)
+                    ok = true
+                end)
+            end
+        end
+    end)
+    if isAlt and not ok then
+        Say("sync failed (menu missing?)")
+    end
+end
+
+
+local function cmd_corbit(name, rad)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    local root = GetRoot(p)
+    if not root then return end
+    StopAll()
+    StartDance2()
+    if tonumber(rad) then
+        MoveSettings.OrbitRadius = tonumber(rad)
+    end
+    -- lock orbit center at where the player is NOW (does not follow them)
+    local center = root.Position
+    local spin = 0
+    local lastT = tick()
+    local r = MoveSettings.OrbitRadius
+    ActiveLoops.corbit = RunService.Heartbeat:Connect(function()
+        local idx, total = GetAltIndex()
+        total = math.max(total, 1)
+        local myRoot = GetRoot(LP)
+        if not myRoot then return end
+        local now = tick()
+        local dt = math.clamp(now - lastT, 0, 0.05)
+        lastT = now
+        spin = (spin + MoveSettings.OrbitSpeed * dt) % (math.pi * 2)
+        local base = ((idx - 1) / total) * math.pi * 2
+        local angle = base + spin
+        local pos = Vector3.new(
+            center.X + math.cos(angle) * r,
+            center.Y + MoveSettings.Height,
+            center.Z + math.sin(angle) * r
+        )
+        applyRootCF(myRoot, CFrame.lookAt(pos, Vector3.new(center.X, pos.Y, center.Z)), nil)
+    end)
+end
+
+local function cmd_triangle(name, rad)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    if not GetRoot(p) then return end
+    StopAll()
+    local r = tonumber(rad) or 8
+    local corners = {
+        Vector3.new(0, 0, -r),
+        Vector3.new(-r * 0.866, 0, r * 0.5),
+        Vector3.new(r * 0.866, 0, r * 0.5),
+    }
+    pcall(function()
+        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+        if hum then hum.AutoRotate = false end
+    end)
+    ActiveLoops.triangle = RunService.Heartbeat:Connect(function()
+        local root = GetRoot(p)
+        local myRoot = GetRoot(LP)
+        if not root or not myRoot then return end
+        local idx = select(1, GetAltIndex())
+        local c = corners[((idx - 1) % 3) + 1]
+        -- world axes only — not rotated by your facing
+        local pos = root.Position + c
+        applyRootCF(myRoot, CFrame.lookAt(pos, root.Position), root)
+    end)
+end
+
+local function cmd_square(name, rad)
+    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    if not p then return end
+    if not GetRoot(p) then return end
+    StopAll()
+    local r = tonumber(rad) or 8
+    local corners = {
+        Vector3.new(-r, 0, -r),
+        Vector3.new(r, 0, -r),
+        Vector3.new(r, 0, r),
+        Vector3.new(-r, 0, r),
+    }
+    pcall(function()
+        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+        if hum then hum.AutoRotate = false end
+    end)
+    ActiveLoops.square = RunService.Heartbeat:Connect(function()
+        local root = GetRoot(p)
+        local myRoot = GetRoot(LP)
+        if not root or not myRoot then return end
+        local idx = select(1, GetAltIndex())
+        local c = corners[((idx - 1) % 4) + 1]
+        local pos = root.Position + c
+        applyRootCF(myRoot, CFrame.lookAt(pos, root.Position), root)
+    end)
+end
+
+Commands = {
+    adduser = function(a) cmd_adduser(table.concat(a, " ")) end,
+    removeuser = function(a) cmd_removeuser(table.concat(a, " ")) end,
+    mwl = function(a) cmd_mwl(table.concat(a, " ")) end,
+    unmwl = function(a) cmd_unmwl(table.concat(a, " ")) end,
+    mwlclear = function() cmd_mwlclear() end,
+    mbl = function(a) cmd_mbl(table.concat(a, " ")) end,
+    unmbl = function(a) cmd_unmbl(table.concat(a, " ")) end,
+    chat = function(a) cmd_chat(table.concat(a, " ")) end,
+    sit = function() cmd_sit() end,
+    jump = function() cmd_jump() end,
+    re = function() cmd_re() end,
+    forcereset = function() cmd_forcereset() end,
+    quit = function() cmd_quit() end,
+    bring = function() cmd_bring() end,
+    goto = function(a) cmd_goto(a[1]) end,
+    follow = function(a) cmd_follow(a[1]) end,
+    walkto = function(a) cmd_walkto(a[1]) end,
+    pf = function(a) cmd_pf(a[1]) end,
+    circle = function(a) cmd_circle(a[1], a[2]) end,
+    orbit = function(a) cmd_orbit(a[1], a[2]) end,
+    corbit = function(a) cmd_corbit(a[1], a[2]) end,
+    triangle = function(a) cmd_triangle(a[1], a[2]) end,
+    square = function(a) cmd_square(a[1], a[2]) end,
+    orbit2 = function(a) cmd_orbit2(a[1], a[2]) end,
+    orbit3 = function(a) cmd_orbit3(a[1], a[2]) end,
+    spiral = function(a) cmd_spiral(a[1], a[2]) end,
+    spiral2 = function(a) cmd_spiral2(a[1], a[2]) end,
+    helicopter = function(a) cmd_helicopter(a[1], a[2]) end,
+    swarm = function(a) cmd_swarm(a[1]) end,
+    swarm2 = function(a) cmd_swarm2(a[1]) end,
+    worm = function(a) cmd_worm(a[1]) end,
+    stackon = function(a) cmd_stackon(a[1]) end,
+    rline = function(a) cmd_rline(a[1]) end,
+    lline = function(a) cmd_lline(a[1]) end,
+    bline = function(a) cmd_bline(a[1]) end,
+    stalk = function(a) cmd_stalk(a[1]) end,
+    wonder = function() cmd_wonder() end,
+    fwonder = function() cmd_fwonder() end,
+    float = function(a) cmd_float(a[1]) end,
+    spin = function(a) cmd_spin(a[1]) end,
+    fling = function(a) cmd_fling(a[1]) end,
+    fling2 = function(a) cmd_fling2(a[1]) end,
+    flingall = function() cmd_flingall() end,
+    firework = function() cmd_firework() end,
+    nuke = function(a) cmd_nuke(a[1]) end,
+    elevator = function(a) cmd_elevator(a[1]) end,
+    mine = function(a) cmd_mine(a[1]) end,
+    npc = function() cmd_npc() end,
+    unnpc = function() cmd_unnpc() end,
+    dance1 = function() cmd_dance1() end,
+    dance2 = function() cmd_dance2() end,
+    dance3 = function() cmd_dance3() end,
+    point = function() cmd_point() end,
+    cheer = function() cmd_cheer() end,
+    wave = function() cmd_wave() end,
+    laugh = function() cmd_laugh() end,
+    spam = function(a) cmd_spam(table.concat(a, " ")) end,
+    unspam = function() cmd_unspam() end,
+    orbitspeed = function(a) cmd_orbitspeed(a[1]) end,
+    orbitradius = function(a) cmd_orbitradius(a[1]) end,
+    spiralspeed = function(a) cmd_spiralspeed(a[1]) end,
+    spiralradius = function(a) cmd_spiralradius(a[1]) end,
+    helicopterspeed = function(a) cmd_helicopterspeed(a[1]) end,
+    helicopterradius = function(a) cmd_helicopterradius(a[1]) end,
+    spamspeed = function(a) cmd_spamspeed(a[1]) end,
+    stop = function() StopAll() cmd_unspam() end,
+    unfollow = function() StopAll() end,
+    unorbit = function() StopAll() end,
+    uncorbit = function() StopAll() end,
+    untriangle = function() StopAll() end,
+    unsquare = function() StopAll() end,
+    unswarm = function() StopAll() end,
+    unworm = function() StopAll() end,
+    unstack = function() StopAll() end,
+    unfloat = function() cmd_unfloat() end,
+    unspin = function() StopAll() end,
+    unstalk = function() StopAll() end,
+    unfling = function() StopAll() end,
+    unhelicopter = function() StopAll() end,
+    unspiral = function() StopAll() end,
+    unwonder = function() StopAll() end,
+    unmine = function() StopAll() end,
+    unmute = function() UnmuteLocal() end,
+    mute = function() MuteLocal() end,
+    avcb = function() cmd_avcb() end,
+    check = function() cmd_check() end,
+    clone = function(a) cmd_clone(table.concat(a, " ")) end,
+    sync = function(a) cmd_sync(table.concat(a, " ")) end,
+    totalcmds = function() cmd_totalcmds() end,
+    credits = function() cmd_credits() end,
+    info = function(a) cmd_info(a[1]) end,
+    setup = function()
+        currentHost = Players:FindFirstChild(S.mainAccount) or LP
+        setupPlayers()
+    end,
+    stopmusic = function() stopMusicLoops() end,
+    ksetup = function() cmd_ksetup() end,
+    kstart = function(a) cmd_kstart(a[1], a[2]) end,
+    kstop = function() cmd_kstop() end,
+    kclear = function() cmd_kclear() end,
+    kthemes = function() cmd_kthemes() end,
+    kend = function() cmd_kend() end,
+}
+
+local RecentChatMessages = {}
+
+local function onChatted(player, message)
+    if not message or message == "" then return end
+    local key = tostring(player.UserId) .. "\0" .. message
+    local now = os.clock()
+    if RecentChatMessages[key] and now - RecentChatMessages[key] < 0.25 then
+        return
+    end
+    RecentChatMessages[key] = now
+    local lower = message:lower()
+    local prefix = (S.prefix or "."):lower()
+
+    -- sync auth tables across alts when main broadcasts
+    if message:sub(1, 12) == "SCHWEIN_AUTH" then
+        if not isMainName(player.Name) then return end
+        local n, id = message:sub(14):match("^(%S+)%s*(%d*)")
+        if n then
+            grantAuth(n, id ~= "" and tonumber(id) or nil)
+        end
+        return
+    end
+    if message:sub(1, 14) == "SCHWEIN_DEAUTH" then
+        if not isMainName(player.Name) then return end
+        local n, id = message:sub(16):match("^(%S+)%s*(%d*)")
+        if n and not isMainName(n) then
+            revokeAuth(n, id ~= "" and tonumber(id) or nil)
+        end
+        return
+    end
+    if message:sub(1, 11) == "SCHWEIN_MWL" then
+        if player.Name ~= S.mainAccount then return end
+        local n, id = message:sub(13):match("^(%S+)%s*(%d*)")
+        if n then musicListGrant(MusicWhitelist, MusicWhitelistIds, n, id ~= "" and tonumber(id) or nil) end
+        return
+    end
+    if message:sub(1, 13) == "SCHWEIN_UNMWL" then
+        if player.Name ~= S.mainAccount then return end
+        local n, id = message:sub(15):match("^(%S+)%s*(%d*)")
+        if n then musicListRevoke(MusicWhitelist, MusicWhitelistIds, n, id ~= "" and tonumber(id) or nil) end
+        return
+    end
+    if message:sub(1, 11) == "SCHWEIN_MBL" then
+        if player.Name ~= S.mainAccount then return end
+        local n, id = message:sub(13):match("^(%S+)%s*(%d*)")
+        if n then musicListGrant(MusicBlacklist, MusicBlacklistIds, n, id ~= "" and tonumber(id) or nil) end
+        return
+    end
+    if message:sub(1, 13) == "SCHWEIN_UNMBL" then
+        if player.Name ~= S.mainAccount then return end
+        local n, id = message:sub(15):match("^(%S+)%s*(%d*)")
+        if n then musicListRevoke(MusicBlacklist, MusicBlacklistIds, n, id ~= "" and tonumber(id) or nil) end
+        return
+    end
+
+    -- music commands: anyone within 10 studs of the music bot
+    if isSetupActive and isQueueBot then
+        if lower:sub(1, 6) == "/play " or lower == "/voteskip" or lower == "yes" or lower == "no" then
+            if not isPlayerInRange(player) then
+                if lower:sub(1, 6) == "/play " then
+                    Say(player.Name .. " too far (come within 10 studs)")
+                end
+                return
+            end
+            if lower:sub(1, 6) == "/play " then
+                if not canSuggestMusic(player) then
+                    Say(player.Name .. " cant suggest songs")
+                    return
+                end
+                local q = message:sub(7)
+                if q ~= "" then
+                    local r = sendToFlask("/play", { query = q })
+                    if r and r.status == "queued" then Say("queued " .. q) end
+                end
+                return
+            end
+            if lower == "/voteskip" then
+                if voteSkipActive or voteSkipUsedForCurrent then return end
+                voteSkipActive = true
+                currentVotes = { yes = {}, no = {} }
+                Say("vote skip 10s yes/no")
+                task.delay(10, function()
+                    voteSkipActive = false
+                    local y, n = 0, 0
+                    for _ in pairs(currentVotes.yes) do y += 1 end
+                    for _ in pairs(currentVotes.no) do n += 1 end
+                    Say("yes " .. y .. " no " .. n)
+                    if y > n then
+                        sendToFlask("/skip", {})
+                        Say("skipped")
+                    else
+                        Say("kept")
+                    end
+                end)
+                return
+            end
+            if voteSkipActive then
+                if lower == "yes" then currentVotes.yes[player.UserId] = true
+                elseif lower == "no" then currentVotes.no[player.UserId] = true end
+                return
+            end
+        end
+    end
+
+    if not isAuthorized(player) then return end
+
+    if isSetupActive and isQueueBot then
+        if lower:sub(1, 6) == "/play " then
+            if not isPlayerInRange(player) then
+                Say(player.Name .. " too far")
+                return
+            end
+            if not canSuggestMusic(player) then
+                Say(player.Name .. " cant suggest songs")
+                return
+            end
+            local q = message:sub(7)
+            if q ~= "" then
+                local r = sendToFlask("/play", { query = q })
+                if r and r.status == "queued" then Say("queued " .. q) end
+            end
+            return
+        end
+        if lower == "/voteskip" then
+            if not isPlayerInRange(player) or voteSkipActive or voteSkipUsedForCurrent then return end
+            voteSkipActive = true
+            currentVotes = { yes = {}, no = {} }
+            Say("vote skip 10s yes/no")
+            task.delay(10, function()
+                voteSkipActive = false
+                local y, n = 0, 0
+                for _ in pairs(currentVotes.yes) do y += 1 end
+                for _ in pairs(currentVotes.no) do n += 1 end
+                Say("yes " .. y .. " no " .. n)
+                if y > n then
+                    sendToFlask("/skip", {})
+                    Say("skipped")
+                else
+                    Say("kept")
+                end
+            end)
+            return
+        end
+        if voteSkipActive then
+            if lower == "yes" then currentVotes.yes[player.UserId] = true
+            elseif lower == "no" then currentVotes.no[player.UserId] = true end
+            return
+        end
+    end
+
+    -- music controls: main + anyone on .adduser whitelist
+    if isQueueBot and isAuthorized(player) then
+        if lower == "/skip" then sendToFlask("/skip", {}) Say("skipped")
+        elseif lower == "/queue" then
+            local d = getQueue()
+            local q = d.queue or {}
+            local msg = ""
+            if d.current_title then msg = "now " .. d.current_title
+            elseif d.current then msg = "now " .. tostring(d.current) end
+            if d.next then msg = msg .. " next " .. tostring(d.next) end
+            msg = msg .. " waiting " .. math.max(0, #q - 1)
+            Say(msg)
+        elseif lower == "/loop" then
+            local r = sendToFlask("/loop", {})
+            if r then Say("loop " .. (r.loop and "on" or "off")) end
+        elseif lower == "/pause" then sendToFlask("/pause", {}) Say("paused")
+        elseif lower == "/resume" or lower == "/unpause" then sendToFlask("/resume", {}) Say("resumed")
+        elseif lower == "/clearqueue" then sendToFlask("/clearqueue", {}) Say("cleared")
+        elseif lower:sub(1, 8) == "/volume " then
+            local vol = tonumber(message:sub(9))
+            if vol and vol >= 0 and vol <= 100 then
+                local r = sendToFlask("/volume", { volume = vol })
+                if r then Say("vol " .. r.volume) end
+            end
+        end
+    end
+
+    if lower:sub(1, #prefix) ~= prefix then return end
+    local body = message:sub(#prefix + 1)
+    local parts = {}
+    for w in body:gmatch("%S+") do table.insert(parts, w) end
+    if #parts == 0 then return end
+    local cmd = parts[1]:lower()
+    table.remove(parts, 1)
+    local fn = Commands[cmd]
+    if fn then
+        if isAlt or isMain or isQueueBot or cmd == "adduser" or cmd == "removeuser" or cmd == "mwl" or cmd == "unmwl" or cmd == "mwlclear" or cmd == "mbl" or cmd == "unmbl" or cmd == "credits" or cmd == "totalcmds" or cmd == "info" or cmd == "check" or cmd == "avcb" or cmd == "sync" or cmd == "clone" or cmd == "ksetup" or cmd == "kstart" or cmd == "kstop" or cmd == "kclear" or cmd == "kthemes" or cmd == "kend" then
+            pcall(fn, parts)
+        end
+    end
+end
+
+local function connectPlayer(plr)
+    track(plr.Chatted:Connect(function(msg)
+        onChatted(plr, msg)
+    end))
+end
+
+for _, p in ipairs(Players:GetPlayers()) do
+    connectPlayer(p)
+end
+track(Players.PlayerAdded:Connect(connectPlayer))
+
+-- TextChatService is the chat path used by current Roblox experiences. Keep
+-- the legacy Player.Chatted listener above for older games, but ignore the
+-- duplicate delivery it can produce.
+track(TextChatService.MessageReceived:Connect(function(textMessage)
+    local source = textMessage.TextSource
+    local player = source and Players:GetPlayerByUserId(source.UserId)
+    local message = textMessage.Text
+    if not player or not message or message == "" then return end
+
+    onChatted(player, message)
+end))
+
+track(LP.CharacterAdded:Connect(function()
+    StopAll()
+    if isAlt then
+        task.defer(CreateBlackout)
+    end
+end))
+
+task.defer(function()
+    if isMain then
+        print("[Schweins Alt Control] main ready")
+    elseif isQueueBot then
+        Say("music bot ready")
+    else
+        print("[Schweins Alt Control] alt ready " .. LP.Name)
+    end
+end)
+
+print("[Schweins Alt Control] loaded")
