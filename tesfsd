@@ -2179,6 +2179,20 @@ local function getStatus()
     return nil
 end
 
+local function getEq()
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if not req or not S.FLASK_API_URL then return nil end
+    local ok, resp = pcall(req, {
+        Url = S.FLASK_API_URL .. "/eq",
+        Method = "GET",
+    })
+    if ok and resp and resp.Body then
+        local s, d = pcall(HttpService.JSONDecode, HttpService, resp.Body)
+        if s then return d end
+    end
+    return nil
+end
+
 local function sendQueueToWebhook()
     if not isQueueBot then return end
     local data = getQueue()
@@ -2902,7 +2916,7 @@ end
 
 
 local COMMAND_CHUNKS = {
-    "cmds: .bring .goto .follow .worm .orbit .corbit .triangle .square .stackon .elevator .swarm .stalk",
+    "cmds: .bring .goto .follow .worm .orbit .visualizer .visualizer2 .stackon .elevator .swarm .stalk",
     "more: .circle .spiral .helicopter .float .spin .wonder .fwonder .fling .flingall .nuke .mine .firework",
     "char: .sit .jump .re .forcereset .npc .unnpc .dance1-3 .clone .sync .avcb .mute .unmute",
     "other: .chat .spam .stop .check .joke .commands .adduser .removeuser .info",
@@ -2932,6 +2946,112 @@ local function cmd_joke()
     Say(JOKES[math.random(1, #JOKES)])
 end
 
+
+local function cmd_visualizer(name, spacing)
+    local p = ResolveTarget(name)
+    if not p then return end
+    StopAll()
+    SetNoclip(true)
+    spacing = tonumber(spacing) or 3.5
+    local maxH = 14
+    local lastFetch = 0
+    local bands = {0, 0, 0, 0, 0, 0, 0, 0}
+    local bass, mid, treble = 0, 0, 0
+    pcall(function()
+        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+        if hum then
+            hum.AutoRotate = false
+            hum.PlatformStand = true
+        end
+    end)
+    -- left = low end, right = high end (sorted alt index)
+    ActiveLoops.visualizer = RunService.Heartbeat:Connect(function()
+        local root = GetRoot(p)
+        local myRoot = GetRoot(LP)
+        if not root or not myRoot then return end
+        if tick() - lastFetch > 0.12 then
+            lastFetch = tick()
+            local data = getEq()
+            if data then
+                if type(data.bands) == "table" then
+                    for i = 1, 8 do
+                        bands[i] = tonumber(data.bands[i]) or bands[i] or 0
+                    end
+                end
+                bass = tonumber(data.bass) or bass
+                mid = tonumber(data.mid) or mid
+                treble = tonumber(data.treble) or treble
+            end
+        end
+        local idx, total = GetAltIndex()
+        total = math.max(total, 1)
+        -- map bot index across 8 bands (leftmost low, rightmost high)
+        local t = (idx - 1) / math.max(total - 1, 1)
+        local bandF = t * 7 + 1
+        local b0 = math.clamp(math.floor(bandF), 1, 8)
+        local b1 = math.clamp(b0 + 1, 1, 8)
+        local frac = bandF - b0
+        local level = (bands[b0] or 0) * (1 - frac) + (bands[b1] or 0) * frac
+        -- slight mix with bass/mid/treble by position
+        if t < 0.33 then
+            level = level * 0.65 + bass * 0.35
+        elseif t < 0.66 then
+            level = level * 0.65 + mid * 0.35
+        else
+            level = level * 0.65 + treble * 0.35
+        end
+        level = math.clamp(level, 0, 1)
+        local height = level * maxH
+        -- line left-to-right relative to commander facing
+        local centered = idx - (total + 1) / 2
+        local offset = root.CFrame.RightVector * (centered * spacing)
+        local pos = root.Position + offset + Vector3.new(0, height, 0)
+        applyRootCF(myRoot, CFrame.lookAt(pos, root.Position), root)
+    end)
+end
+
+local function cmd_visualizer2(name, spacing)
+    -- vertical bars in a circle around you
+    local p = ResolveTarget(name)
+    if not p then return end
+    StopAll()
+    SetNoclip(true)
+    spacing = tonumber(spacing) or 8
+    local maxH = 16
+    local lastFetch = 0
+    local bands = {0, 0, 0, 0, 0, 0, 0, 0}
+    pcall(function()
+        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+        if hum then
+            hum.AutoRotate = false
+            hum.PlatformStand = true
+        end
+    end)
+    ActiveLoops.visualizer2 = RunService.Heartbeat:Connect(function()
+        local root = GetRoot(p)
+        local myRoot = GetRoot(LP)
+        if not root or not myRoot then return end
+        if tick() - lastFetch > 0.12 then
+            lastFetch = tick()
+            local data = getEq()
+            if data and type(data.bands) == "table" then
+                for i = 1, 8 do
+                    bands[i] = tonumber(data.bands[i]) or 0
+                end
+            end
+        end
+        local idx, total = GetAltIndex()
+        total = math.max(total, 1)
+        local angle = ((idx - 1) / total) * math.pi * 2
+        local bandIdx = ((idx - 1) % 8) + 1
+        local level = math.clamp(bands[bandIdx] or 0, 0, 1)
+        local height = level * maxH
+        local pos = root.Position
+            + Vector3.new(math.cos(angle) * spacing, height, math.sin(angle) * spacing)
+        applyRootCF(myRoot, CFrame.lookAt(pos, root.Position), root)
+    end)
+end
+
 Commands = {
     adduser = function(a) cmd_adduser(table.concat(a, " ")) end,
     removeuser = function(a) cmd_removeuser(table.concat(a, " ")) end,
@@ -2952,6 +3072,8 @@ Commands = {
     walkto = function(a) cmd_walkto(a[1]) end,
     pf = function(a) cmd_pf(a[1]) end,
     circle = function(a) cmd_circle(a[1], a[2]) end,
+    visualizer = function(a) cmd_visualizer(a[1], a[2]) end,
+    visualizer2 = function(a) cmd_visualizer2(a[1], a[2]) end,
     orbit = function(a) cmd_orbit(a[1], a[2]) end,
     corbit = function(a) cmd_corbit(a[1], a[2]) end,
     triangle = function(a) cmd_triangle(a[1], a[2]) end,
@@ -3001,6 +3123,8 @@ Commands = {
     stop = function() StopAll() cmd_unspam() end,
     unfollow = function() StopAll() end,
     unorbit = function() StopAll() end,
+    unvisualizer = function() StopAll() end,
+    unvisualizer2 = function() StopAll() end,
     uncorbit = function() StopAll() end,
     untriangle = function() StopAll() end,
     unsquare = function() StopAll() end,
