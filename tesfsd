@@ -637,6 +637,19 @@ local function FindPlayer(query)
     return prefixHit or substrHit
 end
 
+-- who last ran a command (authorized user or main)
+local LastCommander = nil
+local function ResolveTarget(name)
+    if name and tostring(name) ~= "" then
+        local p = FindPlayer(name)
+        if p then return p end
+    end
+    if LastCommander and LastCommander.Parent then
+        return LastCommander
+    end
+    return Players:FindFirstChild(S.mainAccount)
+end
+
 local function GetAltIndex()
     local list = {}
     for _, plr in ipairs(Players:GetPlayers()) do
@@ -878,6 +891,9 @@ local function cmd_adduser(name)
     end
     if isMain then
         Say("added " .. targetName .. " as an authorized user")
+        if p then
+            Whisper(p, "You've been added as an authorized user. You can use bot commands like .follow .orbit /skip /pause.")
+        end
     end
 end
 
@@ -983,12 +999,12 @@ local function cmd_quit()
 end
 
 local function cmd_bring()
-    local main = Players:FindFirstChild(S.mainAccount)
-    if not main then return end
-    local root = GetRoot(main)
+    local target = ResolveTarget(nil)
+    if not target then return end
+    local root = GetRoot(target)
     if not root then return end
     StopAll()
-    TeleportOnce(root.CFrame)
+    TeleportOnce(root.CFrame * CFrame.new(0, 0, 3))
 end
 
 local function cmd_goto(name)
@@ -1001,7 +1017,7 @@ local function cmd_goto(name)
 end
 
 local function cmd_follow(name)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     StopAll()
     local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
@@ -1019,7 +1035,7 @@ local function cmd_walkto(name)
 end
 
 local function cmd_pf(name)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     local targetRoot = GetRoot(p)
     if not targetRoot then return end
@@ -1072,11 +1088,11 @@ end
 local function cmd_circle(a1, a2)
     local p, rad
     if a1 and tonumber(a1) and not a2 then
-        p = Players:FindFirstChild(S.mainAccount)
+        p = ResolveTarget(nil)
         rad = tonumber(a1)
     else
-        p = FindPlayer(a1) or Players:FindFirstChild(S.mainAccount)
-        rad = tonumber(a2) or tonumber(a1) or MoveSettings.OrbitRadius
+        p = ResolveTarget(a1)
+        rad = tonumber(a2) or (FindPlayer(a1) and MoveSettings.OrbitRadius) or tonumber(a1) or MoveSettings.OrbitRadius
         if FindPlayer(a1) then
             rad = tonumber(a2) or MoveSettings.OrbitRadius
         end
@@ -1128,7 +1144,7 @@ local function worldOrbitLoop(p, getOffset)
 end
 
 local function cmd_orbit(name, rad)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     if tonumber(rad) then
         MoveSettings.OrbitRadius = tonumber(rad)
@@ -1162,7 +1178,7 @@ local function cmd_orbit(name, rad)
 end
 
 local function cmd_orbit2(name, rad)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     if tonumber(rad) then
         MoveSettings.OrbitRadius = tonumber(rad)
@@ -1179,7 +1195,7 @@ local function cmd_orbit2(name, rad)
 end
 
 local function cmd_orbit3(name, rad)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     if tonumber(rad) then
         MoveSettings.OrbitRadius = tonumber(rad)
@@ -1201,7 +1217,7 @@ local function cmd_orbit3(name, rad)
 end
 
 local function cmd_spiral(name, rad)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     if tonumber(rad) then
         MoveSettings.SpiralRadius = tonumber(rad)
@@ -1219,7 +1235,7 @@ local function cmd_spiral(name, rad)
 end
 
 local function cmd_spiral2(name, rad)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     if tonumber(rad) then
         MoveSettings.SpiralRadius = tonumber(rad)
@@ -1237,7 +1253,7 @@ local function cmd_spiral2(name, rad)
 end
 
 local function cmd_helicopter(name, rad)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     if tonumber(rad) then
         MoveSettings.HelicopterRadius = tonumber(rad)
@@ -1253,7 +1269,7 @@ local function cmd_helicopter(name, rad)
 end
 
 local function cmd_swarm(name)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     StopAll()
     local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
@@ -1277,7 +1293,7 @@ local function cmd_swarm(name)
 end
 
 local function cmd_swarm2(name)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     local root = GetRoot(p)
     if not root then return end
@@ -1307,7 +1323,7 @@ local function cmd_swarm2(name)
 end
 
 local function cmd_worm(name)
-    local head = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local head = ResolveTarget(name)
     if not head then return end
     StopAll()
     local spacing = 4
@@ -1373,7 +1389,7 @@ local function cmd_worm(name)
 end
 
 local function cmd_stackon(name)
-    local headPlr = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local headPlr = ResolveTarget(name)
     if not headPlr then return end
     StopAll()
     SetNoclip(true)
@@ -1411,7 +1427,7 @@ local function cmd_stackon(name)
 end
 
 local function cmd_rline(name)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     local root = GetRoot(p)
     if not root then return end
@@ -1421,7 +1437,7 @@ local function cmd_rline(name)
 end
 
 local function cmd_lline(name)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     local root = GetRoot(p)
     if not root then return end
@@ -1431,7 +1447,7 @@ local function cmd_lline(name)
 end
 
 local function cmd_bline(name)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     local root = GetRoot(p)
     if not root then return end
@@ -1441,7 +1457,7 @@ local function cmd_bline(name)
 end
 
 local function cmd_stalk(name)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     StopAll()
     local conn = RunService.Heartbeat:Connect(function()
@@ -1672,7 +1688,7 @@ local function cmd_nuke(name)
 end
 
 local function cmd_elevator(name)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     if not GetRoot(p) then return end
     StopAll()
@@ -1706,7 +1722,7 @@ local function cmd_elevator(name)
 end
 
 local function cmd_mine(name)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     StopAll()
     SetNoclip(true)
@@ -1715,22 +1731,35 @@ local function cmd_mine(name)
     local head = char and char:FindFirstChild("Head")
     local myRoot = GetRoot(LP)
     if not myRoot then return end
-    local baseY = 0.5
+    -- top of baseplate so only head sticks out
+    local baseY = 0
     pcall(function()
-        local bp = workspace:FindFirstChild("Baseplate") or workspace:FindFirstChildWhichIsA("BasePart")
+        local bp = workspace:FindFirstChild("Baseplate")
+        if not bp then
+            for _, part in ipairs(workspace:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name:lower():find("base") then
+                    bp = part
+                    break
+                end
+            end
+        end
         if bp then
-            baseY = bp.Position.Y + bp.Size.Y / 2 + 0.4
+            baseY = bp.Position.Y + bp.Size.Y / 2
         end
     end)
+    -- spread in ~20 stud radius around target
     local ang = math.random() * math.pi * 2
-    local dist = 8 + math.random() * 17
+    local dist = 4 + math.random() * 16
     local ox = math.cos(ang) * dist
     local oz = math.sin(ang) * dist
+    -- bury body under floor, head peeks out (~3 studs down from HRP to head offset)
+    local bury = 3.2
     local connPos = RunService.Heartbeat:Connect(function()
         local targetRoot = GetRoot(p)
-        if not targetRoot or not myRoot or not myRoot.Parent then return end
-        myRoot.CFrame = CFrame.new(targetRoot.Position.X + ox, baseY - 1.2, targetRoot.Position.Z + oz)
-        myRoot.AssemblyLinearVelocity = Vector3.zero
+        myRoot = GetRoot(LP)
+        if not targetRoot or not myRoot then return end
+        local pos = Vector3.new(targetRoot.Position.X + ox, baseY - bury, targetRoot.Position.Z + oz)
+        applyRootCF(myRoot, CFrame.new(pos), nil)
     end)
     ActiveLoops["minepos"] = connPos
     if head then
@@ -1738,11 +1767,11 @@ local function cmd_mine(name)
         touchConn = head.Touched:Connect(function(hit)
             if not MineMode then return end
             local other = Players:GetPlayerFromCharacter(hit.Parent)
-            if other and other ~= LP and not S.altAccounts[other.Name] then
+            if other and other ~= LP and not S.altAccounts[other.Name] and other.Name ~= S.mainAccount then
                 MineMode = false
                 if touchConn then touchConn:Disconnect() end
                 pcall(function()
-                    if char then char:BreakJoints() end
+                    if LP.Character then LP.Character:BreakJoints() end
                 end)
                 local exp = Instance.new("Explosion")
                 exp.Position = head.Position
@@ -1849,27 +1878,30 @@ local NPC_LINES = {
 }
 
 local function cmd_npc()
-    NpcMode = true
     StopAll()
+    NpcMode = true
     local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
-    local root = GetRoot(LP)
     if hum then
-        hum.WalkSpeed = 8
+        hum.WalkSpeed = 10
         hum.JumpPower = 30
+        hum.PlatformStand = false
+        hum.AutoRotate = true
     end
-    local nextChat = tick() + math.random(3, 7)
-    local nextWalk = tick() + 1
+    local nextChat = tick() + math.random(2, 5)
+    local nextWalk = tick() + 0.5
     local conn = RunService.Heartbeat:Connect(function()
         if not NpcMode then return end
-        root = GetRoot(LP)
+        local root = GetRoot(LP)
         hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
-        if root and hum and hum.Parent and tick() > nextWalk then
-            nextWalk = tick() + math.random(2, 5)
-            hum:MoveTo(root.Position + Vector3.new(math.random(-22, 22), 0, math.random(-22, 22)))
+        if not root or not hum or not hum.Parent then return end
+        if tick() > nextWalk then
+            nextWalk = tick() + math.random(2, 6)
+            hum:MoveTo(root.Position + Vector3.new(math.random(-25, 25), 0, math.random(-25, 25)))
         end
         if tick() > nextChat then
-            nextChat = tick() + math.random(5, 12)
-            Say(NPC_LINES[math.random(1, #NPC_LINES)])
+            nextChat = tick() + math.random(4, 11)
+            local line = NPC_LINES[math.random(1, #NPC_LINES)]
+            if line then Say(line) end
         end
     end)
     ActiveLoops["npc"] = conn
@@ -2780,7 +2812,7 @@ end
 
 
 local function cmd_corbit(name, rad)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     local root = GetRoot(p)
     if not root then return end
@@ -2815,7 +2847,7 @@ local function cmd_corbit(name, rad)
 end
 
 local function cmd_triangle(name, rad)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     if not GetRoot(p) then return end
     StopAll()
@@ -2842,7 +2874,7 @@ local function cmd_triangle(name, rad)
 end
 
 local function cmd_square(name, rad)
-    local p = FindPlayer(name) or Players:FindFirstChild(S.mainAccount)
+    local p = ResolveTarget(name)
     if not p then return end
     if not GetRoot(p) then return end
     StopAll()
@@ -2866,6 +2898,38 @@ local function cmd_square(name, rad)
         local pos = root.Position + c
         applyRootCF(myRoot, CFrame.lookAt(pos, root.Position), root)
     end)
+end
+
+
+local COMMAND_CHUNKS = {
+    "cmds: .bring .goto .follow .worm .orbit .corbit .triangle .square .stackon .elevator .swarm .stalk",
+    "more: .circle .spiral .helicopter .float .spin .wonder .fwonder .fling .flingall .nuke .mine .firework",
+    "char: .sit .jump .re .forcereset .npc .unnpc .dance1-3 .clone .sync .avcb .mute .unmute",
+    "other: .chat .spam .stop .check .joke .commands .adduser .removeuser .info",
+    "music: /play /skip /pause /resume /loop /queue /clearqueue /volume | kahoot: .ksetup .kstart .kstop .kclear",
+}
+
+local function cmd_commands()
+    local idx = select(1, GetAltIndex())
+    local chunk = COMMAND_CHUNKS[((idx - 1) % #COMMAND_CHUNKS) + 1]
+    Say(chunk)
+end
+
+local JOKES = {
+    "why did the robloxian go to school? to improve his build",
+    "i told my alt a joke about lag and it took 3 seconds to laugh",
+    "why dont avatars play hide and seek? because they always leave a trail of particles",
+    "whats a bot's favorite drink? server juice",
+    "i would tell a floating point joke but it would be irrational",
+    "why was the humanoid fired? too many state changes",
+    "my code works on my machine. problem is this is not my machine",
+    "there are 10 kinds of people. those who know binary and those who dont",
+    "i changed a boolean and nothing happened. classic",
+    "debugging is like being a detective in a crime where you are also the murderer",
+}
+
+local function cmd_joke()
+    Say(JOKES[math.random(1, #JOKES)])
 end
 
 Commands = {
@@ -2959,6 +3023,9 @@ Commands = {
     sync = function(a) cmd_sync(table.concat(a, " ")) end,
     totalcmds = function() cmd_totalcmds() end,
     credits = function() cmd_credits() end,
+    commands = function() cmd_commands() end,
+    cmds = function() cmd_commands() end,
+    joke = function() cmd_joke() end,
     info = function(a) cmd_info(a[1]) end,
     setup = function()
         currentHost = Players:FindFirstChild(S.mainAccount) or LP
@@ -3159,6 +3226,7 @@ local function onChatted(player, message)
     table.remove(parts, 1)
     local fn = Commands[cmd]
     if fn then
+        LastCommander = player
         if isAlt or isMain or isQueueBot or cmd == "adduser" or cmd == "removeuser" or cmd == "mwl" or cmd == "unmwl" or cmd == "mwlclear" or cmd == "mbl" or cmd == "unmbl" or cmd == "credits" or cmd == "totalcmds" or cmd == "info" or cmd == "check" or cmd == "avcb" or cmd == "sync" or cmd == "clone" or cmd == "ksetup" or cmd == "kstart" or cmd == "kstop" or cmd == "kclear" or cmd == "kthemes" or cmd == "kend" then
             pcall(fn, parts)
         end
