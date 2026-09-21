@@ -631,7 +631,9 @@ local function clearLimbMotors()
             end
         end)
     end
-    table.clear(LimbMotorBackup)
+    for k in pairs(LimbMotorBackup) do
+        LimbMotorBackup[k] = nil
+    end
 end
 
 local function backupMotor(motor)
@@ -778,7 +780,9 @@ local function StopAll()
     for _, p in ipairs(ElevatorParts) do
         pcall(function() p:Destroy() end)
     end
-    table.clear(ElevatorParts)
+    for i = #ElevatorParts, 1, -1 do
+        ElevatorParts[i] = nil
+    end
 end
 
 local function WeldTo(targetPart, offsetFunc)
@@ -2201,14 +2205,17 @@ local function getStatus()
 end
 
 local function getEq()
-    local req = (syn and syn.request) or (http and http.request) or http_request or request
-    if not req or not S.FLASK_API_URL then return nil end
+    local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+    if type(req) ~= "function" then return nil end
+    if not S or not S.FLASK_API_URL then return nil end
     local ok, resp = pcall(req, {
-        Url = S.FLASK_API_URL .. "/eq",
+        Url = tostring(S.FLASK_API_URL) .. "/eq",
         Method = "GET",
     })
-    if ok and resp and resp.Body then
-        local s, d = pcall(HttpService.JSONDecode, HttpService, resp.Body)
+    if ok and type(resp) == "table" and resp.Body then
+        local s, d = pcall(function()
+            return HttpService:JSONDecode(resp.Body)
+        end)
         if s then return d end
     end
     return nil
@@ -3383,7 +3390,7 @@ local function cmd_visualizer4(name, spacing)
         end)
     end)
     if not ok then
-        warn("[visualizer4]", err)
+        pcall(function() print("[visualizer4]", err) end)
     end
 end
 
@@ -3412,8 +3419,8 @@ Commands = {
     visualizer2 = function(a) cmd_visualizer2(a[1], a[2]) end,
     visualizer3 = function() cmd_visualizer3() end,
     eqdance = function() cmd_visualizer3() end,
-    visualizer4 = function(a) cmd_visualizer4(a[1], a[2]) end,
-    eqline = function(a) cmd_visualizer4(a[1], a[2]) end,
+    visualizer4 = function(a) if cmd_visualizer4 then cmd_visualizer4(a and a[1], a and a[2]) end end,
+    eqline = function(a) if cmd_visualizer4 then cmd_visualizer4(a and a[1], a and a[2]) end end,
     orbit = function(a) cmd_orbit(a[1], a[2]) end,
     corbit = function(a) cmd_corbit(a[1], a[2]) end,
     triangle = function(a) cmd_triangle(a[1], a[2]) end,
