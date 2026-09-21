@@ -3122,14 +3122,17 @@ function cmd_visualizer(name, spacing)
         end
         local idx, total = GetAltIndex()
         total = math.max(total, 1)
-        local tt = (total == 1) and 0 or ((idx - 1) / (total - 1))
-        local bandF = tt * 7 + 1
-        local b0 = math.clamp(math.floor(bandF), 1, 8)
-        local b1 = math.clamp(b0 + 1, 1, 8)
-        local frac = bandF - b0
-        local level = (smooth[b0] or 0) * (1 - frac) + (smooth[b1] or 0) * frac
-        level = math.clamp(level, 0, 1)
-        display = display * 0.7 + level * 0.3
+        -- spread whatever bot count you have across bass(1) -> treble(8)
+        -- e.g. 6 bots: 1,2,4,5,7,8 so lows and highs both show
+        local bandIdx
+        if total == 1 then
+            bandIdx = 4
+        else
+            bandIdx = math.clamp(math.floor((idx - 1) / (total - 1) * 7 + 1 + 0.5), 1, 8)
+        end
+        local level = math.clamp(smooth[bandIdx] or 0, 0, 1)
+        level = level * level * 0.35 + level * 0.65
+        display = display * 0.5 + level * 0.5
         local height = 0.5 + display * maxH
         local centered = idx - (total + 1) / 2
         local pos = center + right * (centered * spacing) + Vector3.new(0, height, 0)
@@ -3174,7 +3177,12 @@ function cmd_visualizer2(name, spacing)
         local idx, total = GetAltIndex()
         total = math.max(total, 1)
         local angle = ((idx - 1) / total) * math.pi * 2
-        local bandIdx = ((idx - 1) % 8) + 1
+        local bandIdx
+        if total == 1 then
+            bandIdx = 4
+        else
+            bandIdx = math.clamp(math.floor((idx - 1) / (total - 1) * 7 + 1 + 0.5), 1, 8)
+        end
         local level = math.clamp(smooth[bandIdx] or 0, 0, 1)
         display = display * 0.7 + level * 0.3
         local height = 0.5 + display * maxH
