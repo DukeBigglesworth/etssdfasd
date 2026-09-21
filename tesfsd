@@ -55,7 +55,9 @@ local function cleanupAll()
     for _, c in ipairs(Conns) do
         pcall(function() c:Disconnect() end)
     end
-    table.clear(Conns)
+    for i = #Conns, 1, -1 do
+        Conns[i] = nil
+    end
 end
 
 if getgenv().SchweinsAltCleanup then
@@ -998,9 +1000,8 @@ local function cmd_unmwl(name)
 end
 
 local function cmd_mwlclear()
-    table.clear(MusicWhitelist)
-    table.clear(MusicWhitelistIds)
-    -- back to default: everyone can suggest (except blacklist)
+    for k in pairs(MusicWhitelist) do MusicWhitelist[k] = nil end
+    for k in pairs(MusicWhitelistIds) do MusicWhitelistIds[k] = nil end
 end
 
 local function cmd_mbl(name)
@@ -2274,7 +2275,7 @@ local function getStatus()
     return nil
 end
 
-local function getEq()
+function getEq()
     local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
     if type(req) ~= "function" then return nil end
     if not S or not S.FLASK_API_URL then return nil end
