@@ -767,10 +767,29 @@ local function StopAll()
     StopDance()
     SetNoclip(false)
     pcall(function()
-        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+        local char = LP.Character
+        local hum = char and char:FindFirstChildWhichIsA("Humanoid")
         if hum then
             hum.AutoRotate = true
             hum.PlatformStand = false
+            hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+            hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+            pcall(function() hum.RequiresNeck = true end)
+            hum.BreakJointsOnDeath = true
+            if hum.MaxHealth > 10000 then
+                hum.MaxHealth = 100
+                hum.Health = math.min(hum.Health, 100)
+            end
+        end
+        if char then
+            for _, d in ipairs(char:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    -- unanchor body parts left over from eqline
+                    if d.Name ~= "HumanoidRootPart" then
+                        d.Anchored = false
+                    end
+                end
+            end
         end
     end)
     NpcMode = false
@@ -1001,21 +1020,55 @@ local function cmd_jump()
     if hum then hum.Jump = true end
 end
 
-local function cmd_re()
-    local c = LP.Character
-    if c then pcall(function() c:BreakJoints() end) end
-end
-
-local function cmd_forcereset()
+local function forceRespawnCharacter()
+    -- undoes eqline / undead state so the character can actually die and respawn
+    StopAll()
     local c = LP.Character
     if not c then return end
     pcall(function()
         local hum = c:FindFirstChildWhichIsA("Humanoid")
-        if hum then hum.Health = 0 end
+        if hum then
+            hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+            hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+            hum.BreakJointsOnDeath = true
+            pcall(function() hum.RequiresNeck = true end)
+            hum.PlatformStand = false
+            hum.AutoRotate = true
+            hum.WalkSpeed = 16
+            hum.MaxHealth = 100
+            hum.Health = 0
+        end
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA("BasePart") then
+                d.Anchored = false
+                d.CanCollide = true
+                d.Massless = false
+            end
+        end
         c:BreakJoints()
-        task.wait(0.1)
-        if c.Parent then c:Destroy() end
     end)
+    task.defer(function()
+        pcall(function()
+            local c2 = LP.Character
+            if c2 and c2.Parent then
+                c2:Destroy()
+            end
+        end)
+    end)
+    -- client loadcharacter if executor allows
+    pcall(function()
+        if LP.LoadCharacter then
+            LP:LoadCharacter()
+        end
+    end)
+end
+
+local function cmd_re()
+    forceRespawnCharacter()
+end
+
+local function cmd_forcereset()
+    forceRespawnCharacter()
 end
 
 local function cmd_quit()
