@@ -793,23 +793,35 @@ local function StopAll()
         if hum then
             hum.AutoRotate = true
             hum.PlatformStand = false
+            hum.WalkSpeed = 16
+            pcall(function() hum.JumpPower = 50 end)
+            pcall(function() hum.JumpHeight = 7.2 end)
             hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
             hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+            hum:SetStateEnabled(Enum.HumanoidStateType.Physics, true)
             pcall(function() hum.RequiresNeck = true end)
             hum.BreakJointsOnDeath = true
             if hum.MaxHealth > 10000 then
                 hum.MaxHealth = 100
                 hum.Health = math.min(hum.Health, 100)
             end
+            pcall(function()
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
         end
         if char then
             for _, d in ipairs(char:GetDescendants()) do
                 if d:IsA("BasePart") then
-                    -- unanchor body parts left over from eqline
-                    if d.Name ~= "HumanoidRootPart" then
-                        d.Anchored = false
-                    end
+                    d.Anchored = false
+                    d.Massless = false
+                    d.LocalTransparencyModifier = 0
                 end
+            end
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                hrp.Anchored = false
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
             end
         end
     end)
@@ -3294,17 +3306,13 @@ function cmd_visualizer4(name, spacing)
         return
     end
 
-    -- park real body
+    -- soft-park real body (no anchor — so other cmds recover cleanly)
     pcall(function()
         local hum = char:FindFirstChildWhichIsA("Humanoid")
         if hum then
             hum.PlatformStand = true
             hum.WalkSpeed = 0
             hum.AutoRotate = false
-        end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            hrp.Anchored = true
         end
     end)
 
