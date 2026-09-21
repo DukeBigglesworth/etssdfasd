@@ -3162,6 +3162,11 @@ function cmd_visualizer4(name, spacing)
     if not target then return end
     local root0 = GetRoot(target)
     if not root0 then return end
+    local char = LP.Character
+    if not char then return end
+    local hum = char:FindFirstChildWhichIsA("Humanoid")
+    if not hum then return end
+
     StopAll()
     SetNoclip(true)
     spacing = tonumber(spacing) or 2.4
@@ -3175,15 +3180,19 @@ function cmd_visualizer4(name, spacing)
         right = right.Unit
     end
     local center = root0.Position
-    local char = LP.Character
-    if not char then return end
 
+    -- keep character alive after joints break (this was the "reset")
     pcall(function()
-        local hum = char:FindFirstChildWhichIsA("Humanoid")
-        if not hum then return end
+        hum.RequiresNeck = false
+        hum.BreakJointsOnDeath = false
+        hum.MaxHealth = 1e9
+        hum.Health = 1e9
         hum.AutoRotate = false
         hum.PlatformStand = true
         hum.WalkSpeed = 0
+        hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+        hum:ChangeState(Enum.HumanoidStateType.Physics)
         local anim = hum:FindFirstChildOfClass("Animator")
         if anim then
             for _, tr in ipairs(anim:GetPlayingAnimationTracks()) do
@@ -3192,21 +3201,35 @@ function cmd_visualizer4(name, spacing)
         end
     end)
 
+    -- only break motors, not the whole character hierarchy
     pcall(function()
         for _, d in ipairs(char:GetDescendants()) do
-            if d:IsA("Motor6D") or d:IsA("Weld") or d:IsA("WeldConstraint") then
-                pcall(function() d:Destroy() end)
+            if d:IsA("Motor6D") then
+                pcall(function()
+                    d.Enabled = false
+                    d:Destroy()
+                end)
             end
         end
     end)
 
     local order = {
-        Head = 1, Torso = 2, UpperTorso = 3, LowerTorso = 4,
-        LeftUpperArm = 5, LeftLowerArm = 6, LeftHand = 7,
-        RightUpperArm = 8, RightLowerArm = 9, RightHand = 10,
-        LeftUpperLeg = 11, LeftLowerLeg = 12, LeftFoot = 13,
-        RightUpperLeg = 14, RightLowerLeg = 15, RightFoot = 16,
-        HumanoidRootPart = 17,
+        Head = 1,
+        Torso = 2,
+        UpperTorso = 3,
+        LowerTorso = 4,
+        LeftUpperArm = 5,
+        LeftLowerArm = 6,
+        LeftHand = 7,
+        RightUpperArm = 8,
+        RightLowerArm = 9,
+        RightHand = 10,
+        LeftUpperLeg = 11,
+        LeftLowerLeg = 12,
+        LeftFoot = 13,
+        RightUpperLeg = 14,
+        RightLowerLeg = 15,
+        RightFoot = 16,
     }
     order["Left Arm"] = 5
     order["Right Arm"] = 8
@@ -3229,17 +3252,26 @@ function cmd_visualizer4(name, spacing)
     end)
     if #parts == 0 then return end
 
+    -- hide HRP so it doesnt sit in the middle of the line
+    pcall(function()
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            hrp.Transparency = 1
+            hrp.Anchored = true
+        end
+    end)
+
     ActiveLoops.visualizer4 = RunService.RenderStepped:Connect(function()
         local root = GetRoot(target)
         if root then
             center = root.Position
         end
-        if tick() - lastFetch > 0.12 then
+        if tick() - lastFetch > 0.1 then
             lastFetch = tick()
             local data = getEq and getEq() or nil
             if data and type(data.bands) == "table" then
                 for i = 1, 8 do
-                    smooth[i] = smooth[i] * 0.65 + (tonumber(data.bands[i]) or 0) * 0.35
+                    smooth[i] = smooth[i] * 0.6 + (tonumber(data.bands[i]) or 0) * 0.4
                 end
             end
         end
@@ -3254,12 +3286,16 @@ function cmd_visualizer4(name, spacing)
                 local frac = bandF - b0
                 local level = (smooth[b0] or 0) * (1 - frac) + (smooth[b1] or 0) * frac
                 level = math.clamp(level, 0, 1)
-                local height = 0.4 + level * maxH
+                local height = 1 + level * maxH
                 local centered = i - (n + 1) / 2
                 local pos = center + right * (centered * spacing) + Vector3.new(0, height, 0)
                 part.Anchored = true
                 part.CFrame = CFrame.new(pos)
             end
+        end
+        -- keep humanoid alive
+        if hum and hum.Parent then
+            hum.Health = hum.MaxHealth
         end
     end)
 end
