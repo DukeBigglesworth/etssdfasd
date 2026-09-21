@@ -621,24 +621,22 @@ local function applyRootCF(myRoot, cf, physicsTarget)
 end
 
 
-local LimbMotorBackup = {}
-
-local function clearLimbMotors()
-    for motor, tf in pairs(LimbMotorBackup) do
+local LimbFX = { backup = {} }
+function LimbFX.clear()
+    for motor, tf in pairs(LimbFX.backup) do
         pcall(function()
             if motor and motor.Parent then
                 motor.Transform = tf
             end
         end)
     end
-    for k in pairs(LimbMotorBackup) do
-        LimbMotorBackup[k] = nil
+    for k in pairs(LimbFX.backup) do
+        LimbFX.backup[k] = nil
     end
 end
-
-local function backupMotor(motor)
-    if motor and not LimbMotorBackup[motor] then
-        LimbMotorBackup[motor] = motor.Transform
+function LimbFX.save(motor)
+    if motor and not LimbFX.backup[motor] then
+        LimbFX.backup[motor] = motor.Transform
     end
 end
 
@@ -765,7 +763,7 @@ local function StopAll()
         CurrentWeld = nil
     end
     clearHiddenRoot()
-    clearLimbMotors()
+    LimbFX.clear()
     StopDance()
     SetNoclip(false)
     pcall(function()
@@ -2975,7 +2973,7 @@ local function cmd_joke()
 end
 
 
-local function cmd_visualizer(name, spacing)
+function cmd_visualizer(name, spacing)
     local p = ResolveTarget(name)
     if not p then return end
     local root0 = GetRoot(p)
@@ -3034,7 +3032,7 @@ local function cmd_visualizer(name, spacing)
     end)
 end
 
-local function cmd_visualizer2(name, spacing)
+function cmd_visualizer2(name, spacing)
     local p = ResolveTarget(name)
     if not p then return end
     local root0 = GetRoot(p)
@@ -3084,8 +3082,7 @@ local function cmd_visualizer2(name, spacing)
 end
 
 
-local function cmd_visualizer3()
-    -- limb EQ reanim-style: head/arms/torso/legs each follow different bands
+function cmd_visualizer3()
     StopAll()
     SetNoclip(true)
     local lastFetch = 0
@@ -3099,299 +3096,172 @@ local function cmd_visualizer3()
             hum.WalkSpeed = 0
         end
     end)
-
-    local function findMotor(char, names)
-        for _, n in ipairs(names) do
-            local m = char:FindFirstChild(n, true)
+    local function motor(char, names)
+        for i = 1, #names do
+            local m = char:FindFirstChild(names[i], true)
             if m and m:IsA("Motor6D") then
                 return m
             end
         end
         return nil
     end
-
     ActiveLoops.visualizer3 = RunService.RenderStepped:Connect(function()
         local char = LP.Character
         if not char then return end
         if tick() - lastFetch > 0.12 then
             lastFetch = tick()
-            local data = getEq()
+            local data = getEq and getEq() or nil
             if data then
                 if type(data.bands) == "table" then
                     for i = 1, 8 do
-                        local v = tonumber(data.bands[i]) or 0
-                        smooth[i] = smooth[i] * 0.65 + v * 0.35
+                        smooth[i] = smooth[i] * 0.65 + (tonumber(data.bands[i]) or 0) * 0.35
                     end
                 end
-                bass = (bass * 0.65) + ((tonumber(data.bass) or 0) * 0.35)
-                mid = (mid * 0.65) + ((tonumber(data.mid) or 0) * 0.35)
-                treble = (treble * 0.65) + ((tonumber(data.treble) or 0) * 0.35)
+                bass = bass * 0.65 + (tonumber(data.bass) or 0) * 0.35
+                mid = mid * 0.65 + (tonumber(data.mid) or 0) * 0.35
+                treble = treble * 0.65 + (tonumber(data.treble) or 0) * 0.35
             end
         end
-
         local b = math.clamp(bass, 0, 1)
         local m = math.clamp(mid, 0, 1)
         local tr = math.clamp(treble, 0, 1)
-        local s1 = math.clamp(smooth[1] or b, 0, 1)
-        local s3 = math.clamp(smooth[3] or m, 0, 1)
-        local s5 = math.clamp(smooth[5] or m, 0, 1)
-        local s7 = math.clamp(smooth[7] or tr, 0, 1)
         local tnow = tick()
-
-        -- R6 motor names + R15 equivalents
-        local neck = findMotor(char, {"Neck"})
-        local lsh = findMotor(char, {"Left Shoulder", "LeftShoulder"})
-        local rsh = findMotor(char, {"Right Shoulder", "RightShoulder"})
-        local lhp = findMotor(char, {"Left Hip", "LeftHip"})
-        local rhp = findMotor(char, {"Right Hip", "RightHip"})
-        local rootj = findMotor(char, {"RootJoint", "Waist"})
-
-        for _, motor in ipairs({neck, lsh, rsh, lhp, rhp, rootj}) do
-            if motor then backupMotor(motor) end
+        local neck = motor(char, {"Neck"})
+        local lsh = motor(char, {"Left Shoulder", "LeftShoulder"})
+        local rsh = motor(char, {"Right Shoulder", "RightShoulder"})
+        local lhp = motor(char, {"Left Hip", "LeftHip"})
+        local rhp = motor(char, {"Right Hip", "RightHip"})
+        local rootj = motor(char, {"RootJoint", "Waist"})
+        local list = {neck, lsh, rsh, lhp, rhp, rootj}
+        for i = 1, #list do
+            if list[i] then LimbFX.save(list[i]) end
         end
-
-        -- head nods / tilts on treble
         if neck then
-            neck.Transform = CFrame.Angles(
-                math.rad(-25) * tr + math.sin(tnow * 12) * math.rad(8) * tr,
-                math.sin(tnow * 9) * math.rad(18) * tr,
-                math.cos(tnow * 7) * math.rad(12) * tr
-            )
+            neck.Transform = CFrame.Angles(math.rad(-25) * tr, math.sin(tnow * 9) * math.rad(18) * tr, 0)
         end
-
-        -- torso sways on mid
         if rootj then
-            rootj.Transform = CFrame.Angles(
-                math.sin(tnow * 5) * math.rad(12) * m,
-                math.sin(tnow * 3) * math.rad(20) * m,
-                math.cos(tnow * 4) * math.rad(10) * m
-            )
+            rootj.Transform = CFrame.Angles(math.sin(tnow * 5) * math.rad(12) * m, math.sin(tnow * 3) * math.rad(20) * m, 0)
         end
-
-        -- arms pump on mid/high
         if lsh then
-            lsh.Transform = CFrame.Angles(
-                math.rad(-160) * m + math.sin(tnow * 10) * math.rad(40) * m,
-                math.rad(20) * s3,
-                math.rad(-70) * m
-            )
+            lsh.Transform = CFrame.Angles(math.rad(-160) * m + math.sin(tnow * 10) * math.rad(40) * m, 0, math.rad(-70) * m)
         end
         if rsh then
-            rsh.Transform = CFrame.Angles(
-                math.rad(-160) * m + math.cos(tnow * 10) * math.rad(40) * m,
-                math.rad(-20) * s5,
-                math.rad(70) * m
-            )
+            rsh.Transform = CFrame.Angles(math.rad(-160) * m + math.cos(tnow * 10) * math.rad(40) * m, 0, math.rad(70) * m)
         end
-
-        -- legs stomp on bass
         if lhp then
-            lhp.Transform = CFrame.Angles(
-                math.rad(-70) * b + math.sin(tnow * 8) * math.rad(35) * b,
-                0,
-                math.rad(-10) * s1
-            )
+            lhp.Transform = CFrame.Angles(math.rad(-70) * b + math.sin(tnow * 8) * math.rad(35) * b, 0, 0)
         end
         if rhp then
-            rhp.Transform = CFrame.Angles(
-                math.rad(-70) * b + math.cos(tnow * 8) * math.rad(35) * b,
-                0,
-                math.rad(10) * s1
-            )
+            rhp.Transform = CFrame.Angles(math.rad(-70) * b + math.cos(tnow * 8) * math.rad(35) * b, 0, 0)
         end
-
-        -- R15 extra arms/legs if present
-        local lual = findMotor(char, {"LeftUpperArm", "LeftElbow"})
-        local rual = findMotor(char, {"RightUpperArm", "RightElbow"})
-        -- also try common R15 Motor6D names under limbs
-        for _, partName in ipairs({"LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm", "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg", "Head", "UpperTorso", "LowerTorso"}) do
-            local part = char:FindFirstChild(partName)
-            if part then
-                for _, ch in ipairs(part:GetChildren()) do
-                    if ch:IsA("Motor6D") then
-                        backupMotor(ch)
-                    end
-                end
-            end
-        end
-
-        local function pulseMotor(motor, pitch, yaw, roll, amount)
-            if not motor then return end
-            backupMotor(motor)
-            motor.Transform = CFrame.Angles(
-                math.rad(pitch) * amount + math.sin(tnow * 11) * math.rad(pitch * 0.35) * amount,
-                math.rad(yaw) * amount,
-                math.rad(roll) * amount
-            )
-        end
-
-        local lu = findMotor(char, {"LeftShoulder"})
-        local ru = findMotor(char, {"RightShoulder"})
-        local le = findMotor(char, {"LeftElbow"})
-        local re = findMotor(char, {"RightElbow"})
-        local lh = findMotor(char, {"LeftHip"})
-        local rh = findMotor(char, {"RightHip"})
-        local lk = findMotor(char, {"LeftKnee"})
-        local rk = findMotor(char, {"RightKnee"})
-        local waist = findMotor(char, {"Waist"})
-        local neck2 = findMotor(char, {"Neck"})
-
-        pulseMotor(lu, -120, 15, -50, m)
-        pulseMotor(ru, -120, -15, 50, m)
-        pulseMotor(le, -40, 0, 0, tr)
-        pulseMotor(re, -40, 0, 0, tr)
-        pulseMotor(lh, -60, 0, -8, b)
-        pulseMotor(rh, -60, 0, 8, b)
-        pulseMotor(lk, 50, 0, 0, b)
-        pulseMotor(rk, 50, 0, 0, b)
-        pulseMotor(waist, 10, 15, 8, m)
-        pulseMotor(neck2, -20, 12, 8, tr)
     end)
 end
 
-
-
-local function cmd_visualizer4(name, spacing)
-    -- detach body parts into an EQ line (left=low, right=high)
-    local ok, err = pcall(function()
-        local target = ResolveTarget(name)
-        if not target then return end
-        local root0 = GetRoot(target)
-        if not root0 then return end
-        StopAll()
-        SetNoclip(true)
-        spacing = tonumber(spacing) or 2.4
-        local maxH = 12
-        local lastFetch = 0
-        local smooth = {0, 0, 0, 0, 0, 0, 0, 0}
-        local right = root0.CFrame.RightVector
-        if right.Magnitude < 0.1 then
-            right = Vector3.new(1, 0, 0)
-        else
-            right = right.Unit
-        end
-        local center = root0.Position
-        local char = LP.Character
-        if not char then return end
-
-        pcall(function()
-            local hum = char:FindFirstChildWhichIsA("Humanoid")
-            if not hum then return end
-            hum.AutoRotate = false
-            hum.PlatformStand = true
-            hum.WalkSpeed = 0
-            pcall(function() hum.JumpPower = 0 end)
-            pcall(function() hum.JumpHeight = 0 end)
-            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
-            local anim = hum:FindFirstChildOfClass("Animator")
-            if anim then
-                for _, tr in ipairs(anim:GetPlayingAnimationTracks()) do
-                    pcall(function() tr:Stop(0) end)
-                end
-            end
-        end)
-
-        -- break joints
-        pcall(function()
-            for _, d in ipairs(char:GetDescendants()) do
-                if d:IsA("Motor6D") or d:IsA("Weld") or d:IsA("WeldConstraint") then
-                    pcall(function() d:Destroy() end)
-                end
-            end
-        end)
-
-        local prefer = {
-            Head = 1,
-            Torso = 2,
-            UpperTorso = 3,
-            LowerTorso = 4,
-            ["Left Arm"] = 5,
-            LeftUpperArm = 6,
-            LeftLowerArm = 7,
-            LeftHand = 8,
-            ["Right Arm"] = 9,
-            RightUpperArm = 10,
-            RightLowerArm = 11,
-            RightHand = 12,
-            ["Left Leg"] = 13,
-            LeftUpperLeg = 14,
-            LeftLowerLeg = 15,
-            LeftFoot = 16,
-            ["Right Leg"] = 17,
-            RightUpperLeg = 18,
-            RightLowerLeg = 19,
-            RightFoot = 20,
-            HumanoidRootPart = 21,
-        }
-
-        local parts = {}
-        for _, d in ipairs(char:GetDescendants()) do
-            if d:IsA("BasePart") then
-                local keep = prefer[d.Name] ~= nil or d.Name == "Handle"
-                if keep or d.Parent == char then
-                    pcall(function()
-                        d.CanCollide = false
-                        d.Massless = true
-                        d.Anchored = true
-                        d.AssemblyLinearVelocity = Vector3.zero
-                        d.AssemblyAngularVelocity = Vector3.zero
-                    end)
-                    table.insert(parts, d)
-                end
-            end
-        end
-
-        table.sort(parts, function(a, b)
-            local pa = prefer[a.Name] or 100
-            local pb = prefer[b.Name] or 100
-            if pa == pb then
-                return a.Name < b.Name
-            end
-            return pa < pb
-        end)
-
-        if #parts == 0 then return end
-
-        ActiveLoops.visualizer4 = RunService.RenderStepped:Connect(function()
-            pcall(function()
-                local root = GetRoot(target)
-                if root then
-                    center = root.Position
-                end
-                if tick() - lastFetch > 0.12 then
-                    lastFetch = tick()
-                    local data = getEq()
-                    if data and type(data.bands) == "table" then
-                        for i = 1, 8 do
-                            local v = tonumber(data.bands[i]) or 0
-                            smooth[i] = smooth[i] * 0.65 + v * 0.35
-                        end
-                    end
-                end
-                local n = #parts
-                for i, part in ipairs(parts) do
-                    if part and part.Parent then
-                        local tt = (n == 1) and 0 or ((i - 1) / (n - 1))
-                        local bandF = tt * 7 + 1
-                        local b0 = math.clamp(math.floor(bandF), 1, 8)
-                        local b1 = math.clamp(b0 + 1, 1, 8)
-                        local frac = bandF - b0
-                        local level = (smooth[b0] or 0) * (1 - frac) + (smooth[b1] or 0) * frac
-                        level = math.clamp(level, 0, 1)
-                        level = level * level * 0.3 + level * 0.7
-                        local height = 0.4 + level * maxH
-                        local centered = i - (n + 1) / 2
-                        local pos = center + right * (centered * spacing) + Vector3.new(0, height, 0)
-                        part.Anchored = true
-                        part.CFrame = CFrame.new(pos)
-                    end
-                end
-            end)
-        end)
-    end)
-    if not ok then
-        pcall(function() print("[visualizer4]", err) end)
+function cmd_visualizer4(name, spacing)
+    local target = ResolveTarget(name)
+    if not target then return end
+    local root0 = GetRoot(target)
+    if not root0 then return end
+    StopAll()
+    SetNoclip(true)
+    spacing = tonumber(spacing) or 2.4
+    local maxH = 12
+    local lastFetch = 0
+    local smooth = {0, 0, 0, 0, 0, 0, 0, 0}
+    local right = root0.CFrame.RightVector
+    if right.Magnitude < 0.1 then
+        right = Vector3.new(1, 0, 0)
+    else
+        right = right.Unit
     end
+    local center = root0.Position
+    local char = LP.Character
+    if not char then return end
+
+    pcall(function()
+        local hum = char:FindFirstChildWhichIsA("Humanoid")
+        if not hum then return end
+        hum.AutoRotate = false
+        hum.PlatformStand = true
+        hum.WalkSpeed = 0
+        local anim = hum:FindFirstChildOfClass("Animator")
+        if anim then
+            for _, tr in ipairs(anim:GetPlayingAnimationTracks()) do
+                pcall(function() tr:Stop(0) end)
+            end
+        end
+    end)
+
+    pcall(function()
+        for _, d in ipairs(char:GetDescendants()) do
+            if d:IsA("Motor6D") or d:IsA("Weld") or d:IsA("WeldConstraint") then
+                pcall(function() d:Destroy() end)
+            end
+        end
+    end)
+
+    local order = {
+        Head = 1, Torso = 2, UpperTorso = 3, LowerTorso = 4,
+        LeftUpperArm = 5, LeftLowerArm = 6, LeftHand = 7,
+        RightUpperArm = 8, RightLowerArm = 9, RightHand = 10,
+        LeftUpperLeg = 11, LeftLowerLeg = 12, LeftFoot = 13,
+        RightUpperLeg = 14, RightLowerLeg = 15, RightFoot = 16,
+        HumanoidRootPart = 17,
+    }
+    order["Left Arm"] = 5
+    order["Right Arm"] = 8
+    order["Left Leg"] = 11
+    order["Right Leg"] = 14
+
+    local parts = {}
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("BasePart") and order[d.Name] then
+            pcall(function()
+                d.CanCollide = false
+                d.Massless = true
+                d.Anchored = true
+            end)
+            parts[#parts + 1] = d
+        end
+    end
+    table.sort(parts, function(a, b)
+        return (order[a.Name] or 100) < (order[b.Name] or 100)
+    end)
+    if #parts == 0 then return end
+
+    ActiveLoops.visualizer4 = RunService.RenderStepped:Connect(function()
+        local root = GetRoot(target)
+        if root then
+            center = root.Position
+        end
+        if tick() - lastFetch > 0.12 then
+            lastFetch = tick()
+            local data = getEq and getEq() or nil
+            if data and type(data.bands) == "table" then
+                for i = 1, 8 do
+                    smooth[i] = smooth[i] * 0.65 + (tonumber(data.bands[i]) or 0) * 0.35
+                end
+            end
+        end
+        local n = #parts
+        for i = 1, n do
+            local part = parts[i]
+            if part and part.Parent then
+                local tt = (n == 1) and 0 or ((i - 1) / (n - 1))
+                local bandF = tt * 7 + 1
+                local b0 = math.clamp(math.floor(bandF), 1, 8)
+                local b1 = math.clamp(b0 + 1, 1, 8)
+                local frac = bandF - b0
+                local level = (smooth[b0] or 0) * (1 - frac) + (smooth[b1] or 0) * frac
+                level = math.clamp(level, 0, 1)
+                local height = 0.4 + level * maxH
+                local centered = i - (n + 1) / 2
+                local pos = center + right * (centered * spacing) + Vector3.new(0, height, 0)
+                part.Anchored = true
+                part.CFrame = CFrame.new(pos)
+            end
+        end
+    end)
 end
 
 
