@@ -1100,7 +1100,7 @@ local function cmd_pf(name)
         end
         local wp = waypoints[idx]
         if (root.Position - wp.Position).Magnitude < 4 then
-            idx += 1
+            idx = idx + 1
             if wp.Action == Enum.PathWaypointAction.Jump then
                 hum.Jump = true
             end
@@ -2008,7 +2008,7 @@ end
 
 local function cmd_totalcmds()
     local count = 0
-    for _ in pairs(Commands) do count += 1 end
+    for _ in pairs(Commands) do count = count + 1 end
     Say("commands: " .. count)
 end
 
@@ -2062,7 +2062,7 @@ local CMD_INFO = {
     forcereset = "hard kills the alt character",
     quit = "shuts the whole client down",
     bring = "yanks every alt right on top of you",
-    goto = "sends the alt to that player",
+    ["goto"] = "sends the alt to that player",
     follow = "alt walks after the target",
     walkto = "same as follow",
     pf = "pathfinds to the target instead of walking dumb",
@@ -3410,7 +3410,7 @@ Commands = {
     forcereset = function() cmd_forcereset() end,
     quit = function() cmd_quit() end,
     bring = function() cmd_bring() end,
-    goto = function(a) cmd_goto(a[1]) end,
+    ["goto"] = function(a) cmd_goto(a[1]) end,
     follow = function(a) cmd_follow(a[1]) end,
     walkto = function(a) cmd_walkto(a[1]) end,
     pf = function(a) cmd_pf(a[1]) end,
@@ -3595,8 +3595,8 @@ local function onChatted(player, message)
                 task.delay(10, function()
                     voteSkipActive = false
                     local y, n = 0, 0
-                    for _ in pairs(currentVotes.yes) do y += 1 end
-                    for _ in pairs(currentVotes.no) do n += 1 end
+                    for _ in pairs(currentVotes.yes) do y = y + 1 end
+                    for _ in pairs(currentVotes.no) do n = n + 1 end
                     Say("yes " .. y .. " no " .. n)
                     if y > n then
                         sendToFlask("/skip", {})
@@ -3642,8 +3642,8 @@ local function onChatted(player, message)
             task.delay(10, function()
                 voteSkipActive = false
                 local y, n = 0, 0
-                for _ in pairs(currentVotes.yes) do y += 1 end
-                for _ in pairs(currentVotes.no) do n += 1 end
+                for _ in pairs(currentVotes.yes) do y = y + 1 end
+                for _ in pairs(currentVotes.no) do n = n + 1 end
                 Say("yes " .. y .. " no " .. n)
                 if y > n then
                     sendToFlask("/skip", {})
