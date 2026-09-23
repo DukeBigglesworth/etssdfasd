@@ -55,9 +55,7 @@ local function cleanupAll()
     for _, c in ipairs(Conns) do
         pcall(function() c:Disconnect() end)
     end
-    for i = #Conns, 1, -1 do
-        Conns[i] = nil
-    end
+    table.clear(Conns)
 end
 
 if getgenv().SchweinsAltCleanup then
@@ -622,29 +620,6 @@ local function applyRootCF(myRoot, cf, physicsTarget)
     end
 end
 
-
-local LimbFX = { backup = {} }
-local EqlineFolder = nil
-local EqlineHidden = {}
-function LimbFX.clear()
-    for motor, tf in pairs(LimbFX.backup) do
-        pcall(function()
-            if motor and motor.Parent then
-                motor.Transform = tf
-            end
-        end)
-    end
-    for k in pairs(LimbFX.backup) do
-        LimbFX.backup[k] = nil
-    end
-end
-function LimbFX.save(motor)
-    if motor and not LimbFX.backup[motor] then
-        LimbFX.backup[motor] = motor.Transform
-    end
-end
-
-
 local function FindPlayer(query)
     if not query or query == "" then return nil end
     query = tostring(query):lower()
@@ -678,7 +653,7 @@ end
 local function GetAltIndex()
     local list = {}
     for _, plr in ipairs(Players:GetPlayers()) do
-        if S.altAccounts[plr.Name] and GetRoot(plr) then
+        if S.altAccounts[plr.Name] then
             table.insert(list, plr.Name)
         end
     end
@@ -767,49 +742,13 @@ local function StopAll()
         CurrentWeld = nil
     end
     clearHiddenRoot()
-    LimbFX.clear()
-    pcall(function()
-        if EqlineFolder then
-            EqlineFolder:Destroy()
-            EqlineFolder = nil
-        end
-        for part, props in pairs(EqlineHidden) do
-            if part and part.Parent then
-                part.LocalTransparencyModifier = props.ltm or 0
-                if props.trans ~= nil then
-                    part.Transparency = props.trans
-                end
-            end
-        end
-        for k in pairs(EqlineHidden) do
-            EqlineHidden[k] = nil
-        end
-    end)
     StopDance()
     SetNoclip(false)
     pcall(function()
-        local char = LP.Character
-        local hum = char and char:FindFirstChildWhichIsA("Humanoid")
+        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
         if hum then
             hum.AutoRotate = true
             hum.PlatformStand = false
-            hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
-            hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
-            pcall(function() hum.RequiresNeck = true end)
-            hum.BreakJointsOnDeath = true
-            if hum.MaxHealth > 10000 then
-                hum.MaxHealth = 100
-                hum.Health = math.min(hum.Health, 100)
-            end
-        end
-        if char then
-            for _, d in ipairs(char:GetDescendants()) do
-                if d:IsA("BasePart") then
-                    if d.Name ~= "HumanoidRootPart" then
-                        d.Anchored = false
-                    end
-                end
-            end
         end
     end)
     NpcMode = false
@@ -817,9 +756,7 @@ local function StopAll()
     for _, p in ipairs(ElevatorParts) do
         pcall(function() p:Destroy() end)
     end
-    for i = #ElevatorParts, 1, -1 do
-        ElevatorParts[i] = nil
-    end
+    table.clear(ElevatorParts)
 end
 
 local function WeldTo(targetPart, offsetFunc)
@@ -999,8 +936,9 @@ local function cmd_unmwl(name)
 end
 
 local function cmd_mwlclear()
-    for k in pairs(MusicWhitelist) do MusicWhitelist[k] = nil end
-    for k in pairs(MusicWhitelistIds) do MusicWhitelistIds[k] = nil end
+    table.clear(MusicWhitelist)
+    table.clear(MusicWhitelistIds)
+    -- back to default: everyone can suggest (except blacklist)
 end
 
 local function cmd_mbl(name)
@@ -1039,54 +977,21 @@ local function cmd_jump()
     if hum then hum.Jump = true end
 end
 
-local function forceRespawnCharacter()
-    StopAll()
+local function cmd_re()
+    local c = LP.Character
+    if c then pcall(function() c:BreakJoints() end) end
+end
+
+local function cmd_forcereset()
     local c = LP.Character
     if not c then return end
     pcall(function()
         local hum = c:FindFirstChildWhichIsA("Humanoid")
-        if hum then
-            hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
-            hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
-            hum.BreakJointsOnDeath = true
-            pcall(function() hum.RequiresNeck = true end)
-            hum.PlatformStand = false
-            hum.AutoRotate = true
-            hum.WalkSpeed = 16
-            hum.MaxHealth = 100
-            hum.Health = 0
-        end
-        for _, d in ipairs(c:GetDescendants()) do
-            if d:IsA("BasePart") then
-                d.Anchored = false
-                d.CanCollide = true
-                d.Massless = false
-            end
-        end
+        if hum then hum.Health = 0 end
         c:BreakJoints()
+        task.wait(0.1)
+        if c.Parent then c:Destroy() end
     end)
-    task.defer(function()
-        pcall(function()
-            local c2 = LP.Character
-            if c2 and c2.Parent then
-                c2:Destroy()
-            end
-        end)
-    end)
-    -- client loadcharacter if executor allows
-    pcall(function()
-        if LP.LoadCharacter then
-            LP:LoadCharacter()
-        end
-    end)
-end
-
-local function cmd_re()
-    forceRespawnCharacter()
-end
-
-local function cmd_forcereset()
-    forceRespawnCharacter()
 end
 
 local function cmd_quit()
@@ -1169,7 +1074,7 @@ local function cmd_pf(name)
         end
         local wp = waypoints[idx]
         if (root.Position - wp.Position).Magnitude < 4 then
-            idx = idx + 1
+            idx += 1
             if wp.Action == Enum.PathWaypointAction.Jump then
                 hum.Jump = true
             end
@@ -1826,39 +1731,36 @@ local function cmd_mine(name)
     MineMode = true
     local char = LP.Character
     local head = char and char:FindFirstChild("Head")
-    if not GetRoot(LP) then return end
-    local ang = math.random() * math.pi * 2
-    local dist = math.random() * 20
-    local fixedX = anchor.Position.X + math.cos(ang) * dist
-    local fixedZ = anchor.Position.Z + math.sin(ang) * dist
-    local feetY = anchor.Position.Y - 3
+    local myRoot = GetRoot(LP)
+    if not myRoot then return end
+    local baseY = anchor.Position.Y - 3
     pcall(function()
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        local filter = {}
-        if LP.Character then table.insert(filter, LP.Character) end
-        if p.Character then table.insert(filter, p.Character) end
-        params.FilterDescendantsInstances = filter
-        local hit = workspace:Raycast(anchor.Position + Vector3.new(0, 2, 0), Vector3.new(0, -15, 0), params)
-        if hit then
-            feetY = hit.Position.Y
-        else
-            local hum = p.Character and p.Character:FindFirstChildWhichIsA("Humanoid")
-            if hum then
-                feetY = anchor.Position.Y - (hum.HipHeight + 1)
+        local bp = workspace:FindFirstChild("Baseplate")
+        if not bp then
+            for _, part in ipairs(workspace:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name:lower():find("base") then
+                    bp = part
+                    break
+                end
             end
         end
-    end)
-    local headOffset = 1.5
-    pcall(function()
-        local h = LP.Character and LP.Character:FindFirstChild("Head")
-        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-        if h and hrp then
-            headOffset = h.Position.Y - hrp.Position.Y
+        if bp then
+            baseY = bp.Position.Y + bp.Size.Y / 2
         end
     end)
-    local fixedPos = Vector3.new(fixedX, feetY - headOffset, fixedZ)
-    TeleportOnce(CFrame.new(fixedPos))
+    -- fixed world spot (does NOT follow the player)
+    local ang = math.random() * math.pi * 2
+    local dist = 4 + math.random() * 16
+    local fixedX = anchor.Position.X + math.cos(ang) * dist
+    local fixedZ = anchor.Position.Z + math.sin(ang) * dist
+    local bury = 3.2
+    local fixedPos = Vector3.new(fixedX, baseY - bury, fixedZ)
+    local connPos = RunService.Heartbeat:Connect(function()
+        myRoot = GetRoot(LP)
+        if not myRoot then return end
+        applyRootCF(myRoot, CFrame.new(fixedPos), nil)
+    end)
+    ActiveLoops["minepos"] = connPos
     if head then
         local touchConn
         touchConn = head.Touched:Connect(function(hit)
@@ -1867,7 +1769,6 @@ local function cmd_mine(name)
             if other and other ~= LP and not S.altAccounts[other.Name] and other.Name ~= S.mainAccount then
                 MineMode = false
                 if touchConn then touchConn:Disconnect() end
-                ActiveLoops["mine"] = nil
                 pcall(function()
                     if LP.Character then LP.Character:BreakJoints() end
                 end)
@@ -1881,7 +1782,6 @@ local function cmd_mine(name)
         ActiveLoops["mine"] = touchConn
     end
 end
-
 
 local NPC_LINES = {
     "have you seen my hat",
@@ -2082,7 +1982,7 @@ end
 
 local function cmd_totalcmds()
     local count = 0
-    for _ in pairs(Commands) do count = count + 1 end
+    for _ in pairs(Commands) do count += 1 end
     Say("commands: " .. count)
 end
 
@@ -2136,7 +2036,7 @@ local CMD_INFO = {
     forcereset = "hard kills the alt character",
     quit = "shuts the whole client down",
     bring = "yanks every alt right on top of you",
-    ["goto"] = "sends the alt to that player",
+    goto = "sends the alt to that player",
     follow = "alt walks after the target",
     walkto = "same as follow",
     pf = "pathfinds to the target instead of walking dumb",
@@ -2278,35 +2178,16 @@ local function getStatus()
     return nil
 end
 
-function getEq()
-    local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
-    if type(req) ~= "function" then return nil end
-    if not S or not S.FLASK_API_URL then return nil end
-    local base = tostring(S.FLASK_API_URL):gsub("/$", "")
+local function getEq()
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if not req or not S.FLASK_API_URL then return nil end
     local ok, resp = pcall(req, {
-        Url = base .. "/eq",
+        Url = S.FLASK_API_URL .. "/eq",
         Method = "GET",
     })
-    if ok and type(resp) == "table" and resp.Body then
-        local s, d = pcall(function()
-            return HttpService:JSONDecode(resp.Body)
-        end)
-        if s and type(d) == "table" then
-            return d
-        end
-    end
-    -- fallback: status payload includes eq
-    ok, resp = pcall(req, {
-        Url = base .. "/status",
-        Method = "GET",
-    })
-    if ok and type(resp) == "table" and resp.Body then
-        local s, d = pcall(function()
-            return HttpService:JSONDecode(resp.Body)
-        end)
-        if s and type(d) == "table" and type(d.eq) == "table" then
-            return d.eq
-        end
+    if ok and resp and resp.Body then
+        local s, d = pcall(HttpService.JSONDecode, HttpService, resp.Body)
+        if s then return d end
     end
     return nil
 end
@@ -3065,7 +2946,7 @@ local function cmd_joke()
 end
 
 
-function cmd_visualizer(name, spacing)
+local function cmd_visualizer(name, spacing)
     local p = ResolveTarget(name)
     if not p then return end
     local root0 = GetRoot(p)
@@ -3073,12 +2954,12 @@ function cmd_visualizer(name, spacing)
     StopAll()
     SetNoclip(true)
     spacing = tonumber(spacing) or 3.5
-    local maxH = 10
+    local maxH = 12
     local lastFetch = 0
     local smooth = {0, 0, 0, 0, 0, 0, 0, 0}
     local display = 0
+    -- lock line orientation at start so turning doesnt jitter the row
     local right = root0.CFrame.RightVector
-    if right.Magnitude < 0.05 then right = Vector3.new(1, 0, 0) else right = right.Unit end
     local center = root0.Position
     pcall(function()
         local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
@@ -3091,51 +2972,39 @@ function cmd_visualizer(name, spacing)
         local root = GetRoot(p)
         local myRoot = GetRoot(LP)
         if not myRoot then return end
-        if root then center = root.Position end
-        if tick() - lastFetch > 0.1 then
+        if root then
+            center = root.Position
+        end
+        if tick() - lastFetch > 0.15 then
             lastFetch = tick()
             local data = getEq()
             if data and type(data.bands) == "table" then
                 for i = 1, 8 do
-                    smooth[i] = smooth[i] * 0.55 + (tonumber(data.bands[i]) or 0) * 0.45
+                    local v = tonumber(data.bands[i]) or 0
+                    smooth[i] = smooth[i] * 0.7 + v * 0.3
                 end
-            elseif data then
-                local b = tonumber(data.bass) or 0
-                local m = tonumber(data.mid) or 0
-                local tr = tonumber(data.treble) or 0
-                smooth[1] = smooth[1] * 0.55 + b * 0.45
-                smooth[2] = smooth[2] * 0.55 + b * 0.45
-                smooth[4] = smooth[4] * 0.55 + m * 0.45
-                smooth[5] = smooth[5] * 0.55 + m * 0.45
-                smooth[7] = smooth[7] * 0.55 + tr * 0.45
-                smooth[8] = smooth[8] * 0.55 + tr * 0.45
             end
         end
         local idx, total = GetAltIndex()
         total = math.max(total, 1)
-        local bandIdx
-        if total == 1 then
-            bandIdx = 4
-        else
-            bandIdx = math.clamp(math.floor((idx - 1) / (total - 1) * 7 + 1 + 0.5), 1, 8)
-        end
-        local level = math.clamp(smooth[bandIdx] or 0, 0, 1)
-        level = level * level * 0.35 + level * 0.65
-        display = display * 0.5 + level * 0.5
-        local height = 0.5 + display * maxH
+        local t = (total == 1) and 0 or ((idx - 1) / (total - 1))
+        local bandF = t * 7 + 1
+        local b0 = math.clamp(math.floor(bandF), 1, 8)
+        local b1 = math.clamp(b0 + 1, 1, 8)
+        local frac = bandF - b0
+        local level = (smooth[b0] or 0) * (1 - frac) + (smooth[b1] or 0) * frac
+        level = math.clamp(level, 0, 1)
+        -- smooth height so they rise/fall instead of jitter
+        display = display * 0.82 + level * 0.18
+        local height = display * maxH
         local centered = idx - (total + 1) / 2
-        if root then
-            right = root.CFrame.RightVector
-            if right.Magnitude < 0.05 then right = Vector3.new(1, 0, 0) else right = right.Unit end
-        end
         local pos = center + right * (centered * spacing) + Vector3.new(0, height, 0)
-        local look = (root and root.CFrame.LookVector) or Vector3.new(0, 0, -1)
-        local face = CFrame.new(pos, pos + Vector3.new(look.X, 0, look.Z))
-        applyRootCF(myRoot, face, myRoot)
+        -- no lookAt — fixed upright CFrame stops spin jitter
+        applyRootCF(myRoot, CFrame.new(pos), nil)
     end)
 end
 
-function cmd_visualizer2(name, spacing)
+local function cmd_visualizer2(name, spacing)
     local p = ResolveTarget(name)
     if not p then return end
     local root0 = GetRoot(p)
@@ -3143,7 +3012,7 @@ function cmd_visualizer2(name, spacing)
     StopAll()
     SetNoclip(true)
     spacing = tonumber(spacing) or 8
-    local maxH = 11
+    local maxH = 14
     local lastFetch = 0
     local smooth = {0, 0, 0, 0, 0, 0, 0, 0}
     local display = 0
@@ -3159,13 +3028,16 @@ function cmd_visualizer2(name, spacing)
         local root = GetRoot(p)
         local myRoot = GetRoot(LP)
         if not myRoot then return end
-        if root then center = root.Position end
-        if tick() - lastFetch > 0.1 then
+        if root then
+            center = root.Position
+        end
+        if tick() - lastFetch > 0.15 then
             lastFetch = tick()
             local data = getEq()
             if data and type(data.bands) == "table" then
                 for i = 1, 8 do
-                    smooth[i] = smooth[i] * 0.55 + (tonumber(data.bands[i]) or 0) * 0.45
+                    local v = tonumber(data.bands[i]) or 0
+                    smooth[i] = smooth[i] * 0.7 + v * 0.3
                 end
             end
         end
@@ -3174,71 +3046,12 @@ function cmd_visualizer2(name, spacing)
         local angle = ((idx - 1) / total) * math.pi * 2
         local bandIdx = ((idx - 1) % 8) + 1
         local level = math.clamp(smooth[bandIdx] or 0, 0, 1)
-        display = display * 0.7 + level * 0.3
-        local height = 0.5 + display * maxH
+        display = display * 0.82 + level * 0.18
+        local height = display * maxH
         local pos = center + Vector3.new(math.cos(angle) * spacing, height, math.sin(angle) * spacing)
         applyRootCF(myRoot, CFrame.new(pos), nil)
     end)
 end
-
-function cmd_visualizer3()
-    StopAll()
-    SetNoclip(true)
-    local lastFetch = 0
-    local smooth = {0, 0, 0, 0, 0, 0, 0, 0}
-    local bass, mid, treble = 0, 0, 0
-    pcall(function()
-        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
-        if hum then
-            hum.AutoRotate = false
-            hum.PlatformStand = true
-            hum.WalkSpeed = 0
-        end
-    end)
-    local function motor(char, names)
-        for i = 1, #names do
-            local m = char:FindFirstChild(names[i], true)
-            if m and m:IsA("Motor6D") then return m end
-        end
-        return nil
-    end
-    ActiveLoops.visualizer3 = RunService.RenderStepped:Connect(function()
-        local char = LP.Character
-        if not char then return end
-        if tick() - lastFetch > 0.1 then
-            lastFetch = tick()
-            local data = getEq()
-            if data then
-                if type(data.bands) == "table" then
-                    for i = 1, 8 do
-                        smooth[i] = smooth[i] * 0.6 + (tonumber(data.bands[i]) or 0) * 0.4
-                    end
-                end
-                bass = bass * 0.6 + (tonumber(data.bass) or 0) * 0.4
-                mid = mid * 0.6 + (tonumber(data.mid) or 0) * 0.4
-                treble = treble * 0.6 + (tonumber(data.treble) or 0) * 0.4
-            end
-        end
-        local b, m, tr = math.clamp(bass, 0, 1), math.clamp(mid, 0, 1), math.clamp(treble, 0, 1)
-        local tnow = tick()
-        local neck = motor(char, {"Neck"})
-        local lsh = motor(char, {"Left Shoulder", "LeftShoulder"})
-        local rsh = motor(char, {"Right Shoulder", "RightShoulder"})
-        local lhp = motor(char, {"Left Hip", "LeftHip"})
-        local rhp = motor(char, {"Right Hip", "RightHip"})
-        local rootj = motor(char, {"RootJoint", "Waist"})
-        for _, mot in ipairs({neck, lsh, rsh, lhp, rhp, rootj}) do
-            if mot then LimbFX.save(mot) end
-        end
-        if neck then neck.Transform = CFrame.Angles(math.rad(-25) * tr, math.sin(tnow * 9) * math.rad(18) * tr, 0) end
-        if rootj then rootj.Transform = CFrame.Angles(math.sin(tnow * 5) * math.rad(12) * m, math.sin(tnow * 3) * math.rad(20) * m, 0) end
-        if lsh then lsh.Transform = CFrame.Angles(math.rad(-160) * m + math.sin(tnow * 10) * math.rad(40) * m, 0, math.rad(-70) * m) end
-        if rsh then rsh.Transform = CFrame.Angles(math.rad(-160) * m + math.cos(tnow * 10) * math.rad(40) * m, 0, math.rad(70) * m) end
-        if lhp then lhp.Transform = CFrame.Angles(math.rad(-70) * b + math.sin(tnow * 8) * math.rad(35) * b, 0, 0) end
-        if rhp then rhp.Transform = CFrame.Angles(math.rad(-70) * b + math.cos(tnow * 8) * math.rad(35) * b, 0, 0) end
-    end)
-end
-
 
 Commands = {
     adduser = function(a) cmd_adduser(table.concat(a, " ")) end,
@@ -3255,15 +3068,13 @@ Commands = {
     forcereset = function() cmd_forcereset() end,
     quit = function() cmd_quit() end,
     bring = function() cmd_bring() end,
-    ["goto"] = function(a) cmd_goto(a[1]) end,
+    goto = function(a) cmd_goto(a[1]) end,
     follow = function(a) cmd_follow(a[1]) end,
     walkto = function(a) cmd_walkto(a[1]) end,
     pf = function(a) cmd_pf(a[1]) end,
     circle = function(a) cmd_circle(a[1], a[2]) end,
     visualizer = function(a) cmd_visualizer(a[1], a[2]) end,
     visualizer2 = function(a) cmd_visualizer2(a[1], a[2]) end,
-    visualizer3 = function() cmd_visualizer3() end,
-    eqdance = function() cmd_visualizer3() end,
     orbit = function(a) cmd_orbit(a[1], a[2]) end,
     corbit = function(a) cmd_corbit(a[1], a[2]) end,
     triangle = function(a) cmd_triangle(a[1], a[2]) end,
@@ -3438,8 +3249,8 @@ local function onChatted(player, message)
                 task.delay(10, function()
                     voteSkipActive = false
                     local y, n = 0, 0
-                    for _ in pairs(currentVotes.yes) do y = y + 1 end
-                    for _ in pairs(currentVotes.no) do n = n + 1 end
+                    for _ in pairs(currentVotes.yes) do y += 1 end
+                    for _ in pairs(currentVotes.no) do n += 1 end
                     Say("yes " .. y .. " no " .. n)
                     if y > n then
                         sendToFlask("/skip", {})
@@ -3485,8 +3296,8 @@ local function onChatted(player, message)
             task.delay(10, function()
                 voteSkipActive = false
                 local y, n = 0, 0
-                for _ in pairs(currentVotes.yes) do y = y + 1 end
-                for _ in pairs(currentVotes.no) do n = n + 1 end
+                for _ in pairs(currentVotes.yes) do y += 1 end
+                for _ in pairs(currentVotes.no) do n += 1 end
                 Say("yes " .. y .. " no " .. n)
                 if y > n then
                     sendToFlask("/skip", {})
