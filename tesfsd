@@ -1886,34 +1886,39 @@ local function cmd_mine(name)
     MineMode = true
     local char = LP.Character
     local head = char and char:FindFirstChild("Head")
-    local myRoot = GetRoot(LP)
-    if not myRoot then return end
+    if not GetRoot(LP) then return end
     local ang = math.random() * math.pi * 2
-    local dist = 4 + math.random() * 16
+    local dist = math.random() * 20
     local fixedX = anchor.Position.X + math.cos(ang) * dist
     local fixedZ = anchor.Position.Z + math.sin(ang) * dist
     local feetY = anchor.Position.Y - 3
     pcall(function()
-        local origin = Vector3.new(fixedX, anchor.Position.Y + 80, fixedZ)
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         local filter = {}
         if LP.Character then table.insert(filter, LP.Character) end
         if p.Character then table.insert(filter, p.Character) end
         params.FilterDescendantsInstances = filter
-        local hit = workspace:Raycast(origin, Vector3.new(0, -400, 0), params)
+        local hit = workspace:Raycast(anchor.Position + Vector3.new(0, 2, 0), Vector3.new(0, -15, 0), params)
         if hit then
             feetY = hit.Position.Y
+        else
+            local hum = p.Character and p.Character:FindFirstChildWhichIsA("Humanoid")
+            if hum then
+                feetY = anchor.Position.Y - (hum.HipHeight + 1)
+            end
         end
     end)
-    local bury = 3.0
-    local fixedPos = Vector3.new(fixedX, feetY - bury, fixedZ)
-    local connPos = RunService.Heartbeat:Connect(function()
-        myRoot = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") or GetRoot(LP)
-        if not myRoot then return end
-        applyRootCF(myRoot, CFrame.new(fixedPos), myRoot)
+    local headOffset = 1.5
+    pcall(function()
+        local h = LP.Character and LP.Character:FindFirstChild("Head")
+        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+        if h and hrp then
+            headOffset = h.Position.Y - hrp.Position.Y
+        end
     end)
-    ActiveLoops["minepos"] = connPos
+    local fixedPos = Vector3.new(fixedX, feetY - headOffset, fixedZ)
+    TeleportOnce(CFrame.new(fixedPos))
     if head then
         local touchConn
         touchConn = head.Touched:Connect(function(hit)
@@ -1922,6 +1927,7 @@ local function cmd_mine(name)
             if other and other ~= LP and not S.altAccounts[other.Name] and other.Name ~= S.mainAccount then
                 MineMode = false
                 if touchConn then touchConn:Disconnect() end
+                ActiveLoops["mine"] = nil
                 pcall(function()
                     if LP.Character then LP.Character:BreakJoints() end
                 end)
