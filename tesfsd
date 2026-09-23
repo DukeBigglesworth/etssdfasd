@@ -611,13 +611,26 @@ local function clearHiddenRoot()
 end
 
 local function applyRootCF(myRoot, cf, physicsTarget)
-    if not myRoot or typeof(cf) ~= "CFrame" then return end
+    if typeof(cf) ~= "CFrame" then return end
+    local char = LP.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        myRoot = hrp
+    end
+    if not myRoot then return end
+    myRoot.Anchored = false
     myRoot.CFrame = cf
     myRoot.AssemblyLinearVelocity = Vector3.zero
     myRoot.AssemblyAngularVelocity = Vector3.zero
-    if physicsTarget and sethiddenproperty then
+    if sethiddenproperty then
         pcall(function()
-            sethiddenproperty(myRoot, "PhysicsRepRootPart", physicsTarget)
+            sethiddenproperty(myRoot, "NetworkIsSleeping", false)
+            local rep = physicsTarget or myRoot
+            if typeof(rep) == "Instance" then
+                sethiddenproperty(myRoot, "PhysicsRepRootPart", rep)
+            else
+                sethiddenproperty(myRoot, "PhysicsRepRootPart", myRoot)
+            end
         end)
     end
 end
@@ -1274,7 +1287,11 @@ local function worldOrbitLoop(p, getOffset)
         local cf, newSpin = getOffset(idx, total, root, spin, dt)
         spin = newSpin
         if typeof(cf) == "CFrame" then
-            applyRootCF(myRoot, cf, nil)
+            local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                myRoot = hrp
+            end
+            applyRootCF(myRoot, cf, myRoot)
         end
     end)
 end
@@ -1871,32 +1888,30 @@ local function cmd_mine(name)
     local head = char and char:FindFirstChild("Head")
     local myRoot = GetRoot(LP)
     if not myRoot then return end
-    local baseY = anchor.Position.Y - 3
-    pcall(function()
-        local bp = workspace:FindFirstChild("Baseplate")
-        if not bp then
-            for _, part in ipairs(workspace:GetDescendants()) do
-                if part:IsA("BasePart") and part.Name:lower():find("base") then
-                    bp = part
-                    break
-                end
-            end
-        end
-        if bp then
-            baseY = bp.Position.Y + bp.Size.Y / 2
-        end
-    end)
-
     local ang = math.random() * math.pi * 2
     local dist = 4 + math.random() * 16
     local fixedX = anchor.Position.X + math.cos(ang) * dist
     local fixedZ = anchor.Position.Z + math.sin(ang) * dist
-    local bury = 3.2
-    local fixedPos = Vector3.new(fixedX, baseY - bury, fixedZ)
+    local feetY = anchor.Position.Y - 3
+    pcall(function()
+        local origin = Vector3.new(fixedX, anchor.Position.Y + 80, fixedZ)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local filter = {}
+        if LP.Character then table.insert(filter, LP.Character) end
+        if p.Character then table.insert(filter, p.Character) end
+        params.FilterDescendantsInstances = filter
+        local hit = workspace:Raycast(origin, Vector3.new(0, -400, 0), params)
+        if hit then
+            feetY = hit.Position.Y
+        end
+    end)
+    local bury = 3.0
+    local fixedPos = Vector3.new(fixedX, feetY - bury, fixedZ)
     local connPos = RunService.Heartbeat:Connect(function()
-        myRoot = GetRoot(LP)
+        myRoot = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") or GetRoot(LP)
         if not myRoot then return end
-        applyRootCF(myRoot, CFrame.new(fixedPos), nil)
+        applyRootCF(myRoot, CFrame.new(fixedPos), myRoot)
     end)
     ActiveLoops["minepos"] = connPos
     if head then
@@ -3011,7 +3026,7 @@ local function cmd_corbit(name, rad)
             center.Y + MoveSettings.Height,
             center.Z + math.sin(angle) * r
         )
-        applyRootCF(myRoot, CFrame.lookAt(pos, Vector3.new(center.X, pos.Y, center.Z)), nil)
+        applyRootCF(myRoot, CFrame.lookAt(pos, Vector3.new(center.X, pos.Y, center.Z)), myRoot)
     end)
 end
 
@@ -3163,8 +3178,15 @@ function cmd_visualizer(name, spacing)
         display = display * 0.5 + level * 0.5
         local height = 0.5 + display * maxH
         local centered = idx - (total + 1) / 2
+        if root then
+            right = root.CFrame.RightVector
+            if right.Magnitude < 0.05 then right = Vector3.new(1, 0, 0) else right = right.Unit end
+        end
         local pos = center + right * (centered * spacing) + Vector3.new(0, height, 0)
-        applyRootCF(myRoot, CFrame.new(pos), nil)
+        local look = (root and root.CFrame.LookVector) or Vector3.new(0, 0, -1)
+        local face = CFrame.new(pos, pos + Vector3.new(look.X, 0, look.Z))
+        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") or myRoot
+        applyRootCF(hrp, face, hrp)
     end)
 end
 
@@ -3215,7 +3237,10 @@ function cmd_visualizer2(name, spacing)
         display = display * 0.7 + level * 0.3
         local height = 0.5 + display * maxH
         local pos = center + Vector3.new(math.cos(angle) * spacing, height, math.sin(angle) * spacing)
-        applyRootCF(myRoot, CFrame.new(pos), nil)
+        local look = (root and root.CFrame.LookVector) or Vector3.new(0, 0, -1)
+        local face = CFrame.new(pos, pos + Vector3.new(look.X, 0, look.Z))
+        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") or myRoot
+        applyRootCF(hrp, face, hrp)
     end)
 end
 
