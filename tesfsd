@@ -124,9 +124,9 @@ local function revokeAuth(name, userId)
     end
 end
 
--- music suggest lists (queue bot enforces these)
-local MusicWhitelist = {} -- if any entries, ONLY these names/ids can /play
-local MusicBlacklist = {} -- always blocked from /play
+
+local MusicWhitelist = {}
+local MusicBlacklist = {}
 local MusicWhitelistIds = {}
 local MusicBlacklistIds = {}
 
@@ -140,7 +140,7 @@ local function musicListRevoke(list, idList, name, userId)
     if userId then idList[tostring(userId)] = nil end
 end
 
--- everyone can suggest by default; ONLY blacklist blocks
+
 local function canSuggestMusic(plr)
     if not plr then return false end
     if plr.Name == S.mainAccount then return true end
@@ -168,7 +168,7 @@ end
 local function Whisper(plr, msg)
     if not plr or not msg then return end
     local name = plr.Name
-    -- try classic whisper
+
     pcall(function()
         local r = ReplicatedStorage:FindFirstChild("SayMessageRequest", true)
         if r then
@@ -184,7 +184,7 @@ local function Whisper(plr, msg)
         end
     end)
     pcall(function()
-        -- TextChatService whisper channel if present
+
         local channels = TextChatService:FindFirstChild("TextChannels")
         if channels then
             local w = channels:FindFirstChild("RBXWhisper:" .. name)
@@ -600,7 +600,7 @@ local function GetRoot(plr)
         or c:FindFirstChild("LowerTorso")
 end
 
--- continuous loop helpers (same style as orbit: HRP CFrame every frame)
+
 local function clearHiddenRoot()
     pcall(function()
         local myRoot = GetRoot(LP)
@@ -624,6 +624,8 @@ end
 
 
 local LimbFX = { backup = {} }
+local EqlineFolder = nil
+local EqlineHidden = {}
 function LimbFX.clear()
     for motor, tf in pairs(LimbFX.backup) do
         pcall(function()
@@ -660,7 +662,7 @@ local function FindPlayer(query)
     return prefixHit or substrHit
 end
 
--- who last ran a command (authorized user or main)
+
 local LastCommander = nil
 local function ResolveTarget(name)
     if name and tostring(name) ~= "" then
@@ -726,9 +728,9 @@ local function StartDance2()
         if not hum then return end
         local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
         local ids = {
-            "rbxassetid://507776043", -- r15 dance
+            "rbxassetid://507776043",
             "rbxassetid://507777826",
-            "rbxassetid://248263260", -- classic r6-ish
+            "rbxassetid://248263260",
             "rbxassetid://182435998",
         }
         for _, id in ipairs(ids) do
@@ -744,7 +746,7 @@ local function StartDance2()
                 return
             end
         end
-        -- last resort: emote chat
+
         Say("/e dance2")
     end)
 end
@@ -766,6 +768,23 @@ local function StopAll()
     end
     clearHiddenRoot()
     LimbFX.clear()
+    pcall(function()
+        if EqlineFolder then
+            EqlineFolder:Destroy()
+            EqlineFolder = nil
+        end
+        for part, props in pairs(EqlineHidden) do
+            if part and part.Parent then
+                part.LocalTransparencyModifier = props.ltm or 0
+                if props.trans ~= nil then
+                    part.Transparency = props.trans
+                end
+            end
+        end
+        for k in pairs(EqlineHidden) do
+            EqlineHidden[k] = nil
+        end
+    end)
     StopDance()
     SetNoclip(false)
     pcall(function()
@@ -774,22 +793,35 @@ local function StopAll()
         if hum then
             hum.AutoRotate = true
             hum.PlatformStand = false
+            hum.WalkSpeed = 16
+            pcall(function() hum.JumpPower = 50 end)
+            pcall(function() hum.JumpHeight = 7.2 end)
             hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
             hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+            hum:SetStateEnabled(Enum.HumanoidStateType.Physics, true)
             pcall(function() hum.RequiresNeck = true end)
             hum.BreakJointsOnDeath = true
             if hum.MaxHealth > 10000 then
                 hum.MaxHealth = 100
                 hum.Health = math.min(hum.Health, 100)
             end
+            pcall(function()
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
         end
         if char then
             for _, d in ipairs(char:GetDescendants()) do
                 if d:IsA("BasePart") then
-                    if d.Name ~= "HumanoidRootPart" then
-                        d.Anchored = false
-                    end
+                    d.Anchored = false
+                    d.Massless = false
+                    d.LocalTransparencyModifier = 0
                 end
+            end
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                hrp.Anchored = false
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
             end
         end
     end)
@@ -901,18 +933,32 @@ local function TeleportOnce(cf)
     pcall(function()
         if hum then
             hum.PlatformStand = false
+            hum.AutoRotate = true
             hum.Sit = false
+            pcall(function()
+                hum:ChangeState(Enum.HumanoidStateType.Running)
+            end)
         end
         root.Anchored = false
+        if char.PrimaryPart then
+            pcall(function()
+                char:PivotTo(cf)
+            end)
+        end
+        for _ = 1, 8 do
+            root.CFrame = cf
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            if sethiddenproperty then
+                pcall(function()
+                    sethiddenproperty(root, "NetworkIsSleeping", false)
+                end)
+            end
+            RunService.Heartbeat:Wait()
+        end
         root.CFrame = cf
         root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
-        task.defer(function()
-            if root and root.Parent then
-                root.CFrame = cf
-                root.AssemblyLinearVelocity = Vector3.zero
-            end
-        end)
     end)
 end
 
@@ -930,7 +976,7 @@ local function PlayAnim(id)
 end
 
 local function cmd_adduser(name)
-    -- every bot that hears main type .adduser applies it locally (no chat sync needed)
+
     if not name or tostring(name):gsub("%s+", "") == "" then
         if isMain then Say("usage: .adduser name") end
         return
@@ -970,7 +1016,7 @@ local function cmd_removeuser(name)
 end
 
 local function cmd_mwl(name)
-    -- runs on every bot that hears main's .mwl so queue bot gets the list with no extra chat
+
     local p = FindPlayer(name)
     local targetName = p and p.Name or (name and tostring(name):match("%S+"))
     local targetId = p and p.UserId or nil
@@ -1034,6 +1080,7 @@ local function cmd_jump()
 end
 
 local function forceRespawnCharacter()
+
     StopAll()
     local c = LP.Character
     if not c then return end
@@ -1067,7 +1114,7 @@ local function forceRespawnCharacter()
             end
         end)
     end)
-    -- client loadcharacter if executor allows
+
     pcall(function()
         if LP.LoadCharacter then
             LP:LoadCharacter()
@@ -1215,50 +1262,47 @@ local function worldOrbitLoop(p, getOffset)
         end
     end)
     ActiveLoops.orbit = RunService.Heartbeat:Connect(function()
-        if not p or not p.Parent then return end
-        root = (p.Character and p.Character:FindFirstChild("HumanoidRootPart")) or GetRoot(p)
-        local myRoot = (LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")) or GetRoot(LP)
+        root = GetRoot(p)
+        local myRoot = GetRoot(LP)
         if not root or not myRoot then return end
         local now = tick()
         local dt = math.clamp(now - lastT, 0, 0.05)
         lastT = now
         local idx, total = GetAltIndex()
         total = math.max(total, 1)
+
         local cf, newSpin = getOffset(idx, total, root, spin, dt)
         spin = newSpin
         if typeof(cf) == "CFrame" then
-            applyRootCF(myRoot, cf, myRoot)
+            applyRootCF(myRoot, cf, nil)
         end
     end)
 end
 
 local function cmd_orbit(name, rad)
-    local p = nil
-    if name and tostring(name) ~= "" and not tonumber(name) then
-        p = FindPlayer(name)
-    end
-    if not p then
-        p = Players:FindFirstChild(S.mainAccount)
-    end
+    local p = ResolveTarget(name)
     if not p then return end
     if tonumber(rad) then
         MoveSettings.OrbitRadius = tonumber(rad)
-    elseif tonumber(name) then
-        MoveSettings.OrbitRadius = tonumber(name)
     end
     worldOrbitLoop(p, function(idx, total, root, spin, dt)
-        local r = MoveSettings.OrbitRadius or 7
+        local r = MoveSettings.OrbitRadius
         total = math.max(total, 1)
         idx = math.clamp(idx, 1, total)
-        spin = (spin + (MoveSettings.OrbitSpeed or 1.8) * dt) % (math.pi * 2)
+        spin = (spin + MoveSettings.OrbitSpeed * dt) % (math.pi * 2)
         local angle = ((idx - 1) / total) * math.pi * 2 + spin
-        local c = root.Position
-        local pos = Vector3.new(
-            c.X + math.cos(angle) * r,
-            c.Y + (MoveSettings.Height or 0),
-            c.Z + math.sin(angle) * r
-        )
-        return CFrame.lookAt(pos, c), spin
+        local offset = Vector3.new(math.cos(angle) * r, MoveSettings.Height, math.sin(angle) * r)
+        local pos = root.Position + offset
+        local myRoot = GetRoot(LP)
+        if myRoot then
+            local dist = (myRoot.Position - pos).Magnitude
+            if dist > r * 3 + 15 then
+                myRoot.CFrame = CFrame.lookAt(pos, root.Position)
+                myRoot.AssemblyLinearVelocity = Vector3.zero
+                myRoot.AssemblyAngularVelocity = Vector3.zero
+            end
+        end
+        return CFrame.lookAt(pos, root.Position), spin
     end)
 end
 
@@ -1418,7 +1462,7 @@ local function cmd_worm(name)
         local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
         if not myRoot or not hum or not hum.Parent then return end
 
-        -- only alts that currently have a character (skip missing / dead)
+
         local chain = {}
         for _, plr in ipairs(Players:GetPlayers()) do
             if S.altAccounts[plr.Name] and GetRoot(plr) then
@@ -1438,7 +1482,7 @@ local function cmd_worm(name)
         end
         if not myIdx then return end
 
-        -- bot 1 follows head; each next bot follows the previous *present* bot
+
         local followPlr = head
         if myIdx > 1 then
             followPlr = chain[myIdx - 1]
@@ -1460,11 +1504,11 @@ local function cmd_worm(name)
         local goal = targetRoot.Position - flat * spacing
         local dist = (myRoot.Position - goal).Magnitude
 
-        -- catch up if lagging far behind, otherwise keep MoveTo running like .follow
+
         if dist > 40 then
             myRoot.CFrame = CFrame.new(goal + Vector3.new(0, 3, 0))
         elseif dist > 1 then
-            -- throttle MoveTo a bit so humanoid path isn't spammed every frame
+
             if tick() - lastMove > 0.08 then
                 lastMove = tick()
                 hum:MoveTo(goal)
@@ -1720,8 +1764,17 @@ local function cmd_firework()
     SetNoclip(true)
     local root = GetRoot(LP)
     if not root then return end
+    pcall(function()
+        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+        if hum then
+            hum.PlatformStand = false
+            hum:ChangeState(Enum.HumanoidStateType.Freefall)
+        end
+        root.Anchored = false
+    end)
     local angle = 0
     local conn = RunService.Heartbeat:Connect(function(dt)
+        root = GetRoot(LP)
         if not root or not root.Parent then return end
         angle = angle + 25 * dt
         root.CFrame = CFrame.new(root.Position) * CFrame.Angles(angle, angle * 0.7, 0)
@@ -1795,7 +1848,7 @@ local function cmd_elevator(name)
             hum.PlatformStand = true
         end
     end)
-    -- HRP loop + PhysicsRepRootPart (hidden root) so you ride them as a platform
+
     ActiveLoops.elevator = RunService.Heartbeat:Connect(function()
         local targetRoot = GetRoot(p)
         local myRoot = GetRoot(LP)
@@ -1816,38 +1869,36 @@ local function cmd_mine(name)
     MineMode = true
     local char = LP.Character
     local head = char and char:FindFirstChild("Head")
-    if not GetRoot(LP) then return end
-    local ang = math.random() * math.pi * 2
-    local dist = math.random() * 20
-    local fixedX = anchor.Position.X + math.cos(ang) * dist
-    local fixedZ = anchor.Position.Z + math.sin(ang) * dist
-    local feetY = anchor.Position.Y - 3
+    local myRoot = GetRoot(LP)
+    if not myRoot then return end
+    local baseY = anchor.Position.Y - 3
     pcall(function()
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        local filter = {}
-        if LP.Character then table.insert(filter, LP.Character) end
-        if p.Character then table.insert(filter, p.Character) end
-        params.FilterDescendantsInstances = filter
-        local hit = workspace:Raycast(anchor.Position + Vector3.new(0, 2, 0), Vector3.new(0, -15, 0), params)
-        if hit then
-            feetY = hit.Position.Y
-        else
-            local hum = p.Character and p.Character:FindFirstChildWhichIsA("Humanoid")
-            if hum then
-                feetY = anchor.Position.Y - (hum.HipHeight + 1)
+        local bp = workspace:FindFirstChild("Baseplate")
+        if not bp then
+            for _, part in ipairs(workspace:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name:lower():find("base") then
+                    bp = part
+                    break
+                end
             end
         end
-    end)
-    local headOffset = 1.5
-    pcall(function()
-        local h = LP.Character and LP.Character:FindFirstChild("Head")
-        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-        if h and hrp then
-            headOffset = h.Position.Y - hrp.Position.Y
+        if bp then
+            baseY = bp.Position.Y + bp.Size.Y / 2
         end
     end)
-    TeleportOnce(CFrame.new(Vector3.new(fixedX, feetY - headOffset, fixedZ)))
+
+    local ang = math.random() * math.pi * 2
+    local dist = 4 + math.random() * 16
+    local fixedX = anchor.Position.X + math.cos(ang) * dist
+    local fixedZ = anchor.Position.Z + math.sin(ang) * dist
+    local bury = 3.2
+    local fixedPos = Vector3.new(fixedX, baseY - bury, fixedZ)
+    local connPos = RunService.Heartbeat:Connect(function()
+        myRoot = GetRoot(LP)
+        if not myRoot then return end
+        applyRootCF(myRoot, CFrame.new(fixedPos), nil)
+    end)
+    ActiveLoops["minepos"] = connPos
     if head then
         local touchConn
         touchConn = head.Touched:Connect(function(hit)
@@ -1856,7 +1907,6 @@ local function cmd_mine(name)
             if other and other ~= LP and not S.altAccounts[other.Name] and other.Name ~= S.mainAccount then
                 MineMode = false
                 if touchConn then touchConn:Disconnect() end
-                ActiveLoops["mine"] = nil
                 pcall(function()
                     if LP.Character then LP.Character:BreakJoints() end
                 end)
@@ -1870,7 +1920,6 @@ local function cmd_mine(name)
         ActiveLoops["mine"] = touchConn
     end
 end
-
 
 local NPC_LINES = {
     "have you seen my hat",
@@ -2095,8 +2144,7 @@ local function cmd_clone(name)
     local cloneRemote = ReplicatedStorage:FindFirstChild("event_clone_avatar")
     local profileRemote = ReplicatedStorage:FindFirstChild("ProfileAvatarRemote")
 
-    -- Each supported game exposes one of these remotes. Only try the second
-    -- remote when the first is missing or cannot be fired.
+
     local cloned = false
     if cloneRemote and cloneRemote:IsA("RemoteEvent") then
         cloned = pcall(function()
@@ -2284,7 +2332,7 @@ function getEq()
             return d
         end
     end
-    -- fallback: status payload includes eq
+
     ok, resp = pcall(req, {
         Url = base .. "/status",
         Method = "GET",
@@ -2358,7 +2406,7 @@ local function startMusicLoops()
                         if status.current_title ~= lastKnownSong then
                             lastKnownSong = status.current_title
                             voteSkipUsedForCurrent = false
-                            -- only one random alt announces (stable pick from song title)
+
                             local alts = {}
                             for _, plr in ipairs(Players:GetPlayers()) do
                                 if S.altAccounts[plr.Name] then
@@ -2388,7 +2436,7 @@ local function startMusicLoops()
             statusCheckLoop = nil
         end)
     end
-    -- only main account reminds, every 5 minutes
+
     if isMain and not reminderLoop then
         reminderLoop = task.spawn(function()
             while isSetupActive do
@@ -2488,7 +2536,7 @@ end
 
 local function KahootParseBody(body)
     if not body or body == "" then return nil end
-    -- pure JSON array/object
+
     local okJ, decoded = pcall(function()
         return HttpService:JSONDecode(body)
     end)
@@ -2497,7 +2545,7 @@ local function KahootParseBody(body)
         if decoded[1] and type(decoded[1]) == "table" then return decoded end
         return decoded
     end
-    -- lua table returned from loadstring
+
     local okL, result = pcall(function()
         return loadstring(body)()
     end)
@@ -2709,7 +2757,7 @@ function cmd_ksetup()
 end
 
 function cmd_kstart(themeOrRounds, maybeRounds)
-    -- wipe scores on every bot so scoreboard starts clean
+
     KahootResetStats()
     KahootGameActive = false
     local theme, rounds = nil, nil
@@ -2720,7 +2768,7 @@ function cmd_kstart(themeOrRounds, maybeRounds)
         rounds = tonumber(maybeRounds)
     end
     local themes = S.kahootThemes or {}
-    -- every kahoot bot loads the same questions so answer bots can speak options
+
     if theme and themes[theme] then
         KahootTheme = theme
         KahootQuestions = KahootLoadQuestions(themes[theme])
@@ -2787,7 +2835,7 @@ end
 local function KahootOnChat(player, message)
     if not KahootActive then return end
     task.spawn(function()
-        -- new game / explicit clear (works even when host bot isnt authorized)
+
         if message == "SCHWEIN_KCLEAR" or message == ".kclear" or message == "Scores have been cleared!" then
             KahootResetStats()
             return
@@ -2942,7 +2990,7 @@ local function cmd_corbit(name, rad)
     if tonumber(rad) then
         MoveSettings.OrbitRadius = tonumber(rad)
     end
-    -- lock orbit center at where the player is NOW (does not follow them)
+
     local center = root.Position
     local spin = 0
     local lastT = tick()
@@ -2988,7 +3036,7 @@ local function cmd_triangle(name, rad)
         if not root or not myRoot then return end
         local idx = select(1, GetAltIndex())
         local c = corners[((idx - 1) % 3) + 1]
-        -- world axes only — not rotated by your facing
+
         local pos = root.Position + c
         applyRootCF(myRoot, CFrame.lookAt(pos, root.Position), root)
     end)
@@ -3102,6 +3150,8 @@ function cmd_visualizer(name, spacing)
         end
         local idx, total = GetAltIndex()
         total = math.max(total, 1)
+
+
         local bandIdx
         if total == 1 then
             bandIdx = 4
@@ -3113,14 +3163,8 @@ function cmd_visualizer(name, spacing)
         display = display * 0.5 + level * 0.5
         local height = 0.5 + display * maxH
         local centered = idx - (total + 1) / 2
-        if root then
-            right = root.CFrame.RightVector
-            if right.Magnitude < 0.05 then right = Vector3.new(1, 0, 0) else right = right.Unit end
-        end
         local pos = center + right * (centered * spacing) + Vector3.new(0, height, 0)
-        local look = (root and root.CFrame.LookVector) or Vector3.new(0, 0, -1)
-        local face = CFrame.new(pos, pos + Vector3.new(look.X, 0, look.Z))
-        applyRootCF(myRoot, face, myRoot)
+        applyRootCF(myRoot, CFrame.new(pos), nil)
     end)
 end
 
@@ -3161,7 +3205,12 @@ function cmd_visualizer2(name, spacing)
         local idx, total = GetAltIndex()
         total = math.max(total, 1)
         local angle = ((idx - 1) / total) * math.pi * 2
-        local bandIdx = ((idx - 1) % 8) + 1
+        local bandIdx
+        if total == 1 then
+            bandIdx = 4
+        else
+            bandIdx = math.clamp(math.floor((idx - 1) / (total - 1) * 7 + 1 + 0.5), 1, 8)
+        end
         local level = math.clamp(smooth[bandIdx] or 0, 0, 1)
         display = display * 0.7 + level * 0.3
         local height = 0.5 + display * maxH
@@ -3228,6 +3277,120 @@ function cmd_visualizer3()
     end)
 end
 
+function cmd_visualizer4(name, spacing)
+
+    local target = ResolveTarget(name)
+    if not target then return end
+    local root0 = GetRoot(target)
+    if not root0 then return end
+    local char = LP.Character
+    if not char then return end
+    StopAll()
+    spacing = tonumber(spacing) or 2.4
+    local maxH = 12
+    local lastFetch = 0
+    local smooth = {0, 0, 0, 0, 0, 0, 0, 0}
+    local right = root0.CFrame.RightVector
+    if right.Magnitude < 0.05 then right = Vector3.new(1, 0, 0) else right = right.Unit end
+    local center = root0.Position
+
+    local order = {
+        Head = 1, Torso = 2, UpperTorso = 3, LowerTorso = 4,
+        LeftUpperArm = 5, LeftLowerArm = 6, LeftHand = 7,
+        RightUpperArm = 8, RightLowerArm = 9, RightHand = 10,
+        LeftUpperLeg = 11, LeftLowerLeg = 12, LeftFoot = 13,
+        RightUpperLeg = 14, RightLowerLeg = 15, RightFoot = 16,
+    }
+    order["Left Arm"] = 5
+    order["Right Arm"] = 8
+    order["Left Leg"] = 11
+    order["Right Leg"] = 14
+
+    local folder = Instance.new("Folder")
+    folder.Name = "SchweinEqline_" .. LP.Name
+    folder.Parent = workspace
+    EqlineFolder = folder
+
+    local clones = {}
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("BasePart") and order[d.Name] then
+            local ok, cl = pcall(function()
+                local c = d:Clone()
+                c.Anchored = true
+                c.CanCollide = false
+                c.Massless = true
+                c.Parent = folder
+                return c
+            end)
+            if ok and cl then
+                clones[#clones + 1] = cl
+
+                EqlineHidden[d] = {
+                    ltm = d.LocalTransparencyModifier,
+                    trans = d.Transparency,
+                }
+                d.LocalTransparencyModifier = 1
+            end
+        end
+    end
+    table.sort(clones, function(a, b)
+        return (order[a.Name] or 100) < (order[b.Name] or 100)
+    end)
+    if #clones == 0 then
+        folder:Destroy()
+        EqlineFolder = nil
+        return
+    end
+
+
+    pcall(function()
+        local hum = char:FindFirstChildWhichIsA("Humanoid")
+        if hum then
+            hum.PlatformStand = true
+            hum.WalkSpeed = 0
+            hum.AutoRotate = false
+        end
+    end)
+
+    ActiveLoops.visualizer4 = RunService.RenderStepped:Connect(function()
+        local root = GetRoot(target)
+        if root then center = root.Position end
+        if tick() - lastFetch > 0.1 then
+            lastFetch = tick()
+            local data = getEq()
+            if data and type(data.bands) == "table" then
+                for i = 1, 8 do
+                    smooth[i] = smooth[i] * 0.55 + (tonumber(data.bands[i]) or 0) * 0.45
+                end
+            elseif data then
+                local b = tonumber(data.bass) or 0
+                local m = tonumber(data.mid) or 0
+                local tr = tonumber(data.treble) or 0
+                smooth[1] = b
+                smooth[4] = m
+                smooth[7] = tr
+            end
+        end
+        local n = #clones
+        for i = 1, n do
+            local part = clones[i]
+            if part and part.Parent then
+                local tt = (n == 1) and 0 or ((i - 1) / (n - 1))
+                local bandF = tt * 7 + 1
+                local b0 = math.clamp(math.floor(bandF), 1, 8)
+                local b1 = math.clamp(b0 + 1, 1, 8)
+                local frac = bandF - b0
+                local level = (smooth[b0] or 0) * (1 - frac) + (smooth[b1] or 0) * frac
+                level = math.clamp(level, 0, 1)
+                local height = 1 + level * maxH
+                local centered = i - (n + 1) / 2
+                local pos = center + right * (centered * spacing) + Vector3.new(0, height, 0)
+                part.CFrame = CFrame.new(pos)
+            end
+        end
+    end)
+end
+
 
 Commands = {
     adduser = function(a) cmd_adduser(table.concat(a, " ")) end,
@@ -3253,6 +3416,8 @@ Commands = {
     visualizer2 = function(a) cmd_visualizer2(a[1], a[2]) end,
     visualizer3 = function() cmd_visualizer3() end,
     eqdance = function() cmd_visualizer3() end,
+    visualizer4 = function(a) cmd_visualizer4(a and a[1], a and a[2]) end,
+    eqline = function(a) cmd_visualizer4(a and a[1], a and a[2]) end,
     orbit = function(a) cmd_orbit(a[1], a[2]) end,
     corbit = function(a) cmd_corbit(a[1], a[2]) end,
     triangle = function(a) cmd_triangle(a[1], a[2]) end,
@@ -3356,7 +3521,7 @@ local function onChatted(player, message)
     local lower = message:lower()
     local prefix = (S.prefix or "."):lower()
 
-    -- sync auth tables across alts when main broadcasts
+
     if message:sub(1, 12) == "SCHWEIN_AUTH" then
         if not isMainName(player.Name) then return end
         local n, id = message:sub(14):match("^(%S+)%s*(%d*)")
@@ -3398,7 +3563,7 @@ local function onChatted(player, message)
         return
     end
 
-    -- music commands: anyone within 10 studs of the music bot
+
     if isSetupActive and isQueueBot then
         if lower:sub(1, 6) == "/play " or lower == "/voteskip" or lower == "yes" or lower == "no" then
             if not isPlayerInRange(player) then
@@ -3493,7 +3658,7 @@ local function onChatted(player, message)
         end
     end
 
-    -- music controls: main + anyone on .adduser whitelist
+
     if isQueueBot and isAuthorized(player) then
         if lower == "/skip" then sendToFlask("/skip", {}) Say("skipped")
         elseif lower == "/queue" then
@@ -3547,9 +3712,7 @@ for _, p in ipairs(Players:GetPlayers()) do
 end
 track(Players.PlayerAdded:Connect(connectPlayer))
 
--- TextChatService is the chat path used by current Roblox experiences. Keep
--- the legacy Player.Chatted listener above for older games, but ignore the
--- duplicate delivery it can produce.
+
 track(TextChatService.MessageReceived:Connect(function(textMessage)
     local source = textMessage.TextSource
     local player = source and Players:GetPlayerByUserId(source.UserId)
