@@ -1724,8 +1724,6 @@ end
 local function cmd_mine(name)
     local p = ResolveTarget(name)
     if not p then return end
-    local anchor = GetRoot(p)
-    if not anchor then return end
     StopAll()
     SetNoclip(true)
     MineMode = true
@@ -1733,7 +1731,8 @@ local function cmd_mine(name)
     local head = char and char:FindFirstChild("Head")
     local myRoot = GetRoot(LP)
     if not myRoot then return end
-    local baseY = anchor.Position.Y - 3
+    -- top of baseplate so only head sticks out
+    local baseY = 0
     pcall(function()
         local bp = workspace:FindFirstChild("Baseplate")
         if not bp then
@@ -1748,17 +1747,19 @@ local function cmd_mine(name)
             baseY = bp.Position.Y + bp.Size.Y / 2
         end
     end)
-    -- fixed world spot (does NOT follow the player)
+    -- spread in ~20 stud radius around target
     local ang = math.random() * math.pi * 2
     local dist = 4 + math.random() * 16
-    local fixedX = anchor.Position.X + math.cos(ang) * dist
-    local fixedZ = anchor.Position.Z + math.sin(ang) * dist
+    local ox = math.cos(ang) * dist
+    local oz = math.sin(ang) * dist
+    -- bury body under floor, head peeks out (~3 studs down from HRP to head offset)
     local bury = 3.2
-    local fixedPos = Vector3.new(fixedX, baseY - bury, fixedZ)
     local connPos = RunService.Heartbeat:Connect(function()
+        local targetRoot = GetRoot(p)
         myRoot = GetRoot(LP)
-        if not myRoot then return end
-        applyRootCF(myRoot, CFrame.new(fixedPos), nil)
+        if not targetRoot or not myRoot then return end
+        local pos = Vector3.new(targetRoot.Position.X + ox, baseY - bury, targetRoot.Position.Z + oz)
+        applyRootCF(myRoot, CFrame.new(pos), nil)
     end)
     ActiveLoops["minepos"] = connPos
     if head then
@@ -2169,20 +2170,6 @@ local function getStatus()
     if not req then return nil end
     local ok, resp = pcall(req, {
         Url = S.FLASK_API_URL .. "/status",
-        Method = "GET",
-    })
-    if ok and resp and resp.Body then
-        local s, d = pcall(HttpService.JSONDecode, HttpService, resp.Body)
-        if s then return d end
-    end
-    return nil
-end
-
-local function getEq()
-    local req = (syn and syn.request) or (http and http.request) or http_request or request
-    if not req or not S.FLASK_API_URL then return nil end
-    local ok, resp = pcall(req, {
-        Url = S.FLASK_API_URL .. "/eq",
         Method = "GET",
     })
     if ok and resp and resp.Body then
@@ -2915,7 +2902,7 @@ end
 
 
 local COMMAND_CHUNKS = {
-    "cmds: .bring .goto .follow .worm .orbit .visualizer .visualizer2 .stackon .elevator .swarm .stalk",
+    "cmds: .bring .goto .follow .worm .orbit .corbit .triangle .square .stackon .elevator .swarm .stalk",
     "more: .circle .spiral .helicopter .float .spin .wonder .fwonder .fling .flingall .nuke .mine .firework",
     "char: .sit .jump .re .forcereset .npc .unnpc .dance1-3 .clone .sync .avcb .mute .unmute",
     "other: .chat .spam .stop .check .joke .commands .adduser .removeuser .info",
@@ -2945,114 +2932,6 @@ local function cmd_joke()
     Say(JOKES[math.random(1, #JOKES)])
 end
 
-
-local function cmd_visualizer(name, spacing)
-    local p = ResolveTarget(name)
-    if not p then return end
-    local root0 = GetRoot(p)
-    if not root0 then return end
-    StopAll()
-    SetNoclip(true)
-    spacing = tonumber(spacing) or 3.5
-    local maxH = 12
-    local lastFetch = 0
-    local smooth = {0, 0, 0, 0, 0, 0, 0, 0}
-    local display = 0
-    -- lock line orientation at start so turning doesnt jitter the row
-    local right = root0.CFrame.RightVector
-    local center = root0.Position
-    pcall(function()
-        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
-        if hum then
-            hum.AutoRotate = false
-            hum.PlatformStand = true
-        end
-    end)
-    ActiveLoops.visualizer = RunService.Heartbeat:Connect(function()
-        local root = GetRoot(p)
-        local myRoot = GetRoot(LP)
-        if not myRoot then return end
-        if root then
-            center = root.Position
-        end
-        if tick() - lastFetch > 0.15 then
-            lastFetch = tick()
-            local data = getEq()
-            if data and type(data.bands) == "table" then
-                for i = 1, 8 do
-                    local v = tonumber(data.bands[i]) or 0
-                    smooth[i] = smooth[i] * 0.7 + v * 0.3
-                end
-            end
-        end
-        local idx, total = GetAltIndex()
-        total = math.max(total, 1)
-        local t = (total == 1) and 0 or ((idx - 1) / (total - 1))
-        local bandF = t * 7 + 1
-        local b0 = math.clamp(math.floor(bandF), 1, 8)
-        local b1 = math.clamp(b0 + 1, 1, 8)
-        local frac = bandF - b0
-        local level = (smooth[b0] or 0) * (1 - frac) + (smooth[b1] or 0) * frac
-        level = math.clamp(level, 0, 1)
-        -- smooth height so they rise/fall instead of jitter
-        display = display * 0.82 + level * 0.18
-        local height = display * maxH
-        local centered = idx - (total + 1) / 2
-        local pos = center + right * (centered * spacing) + Vector3.new(0, height, 0)
-        -- no lookAt — fixed upright CFrame stops spin jitter
-        applyRootCF(myRoot, CFrame.new(pos), nil)
-    end)
-end
-
-local function cmd_visualizer2(name, spacing)
-    local p = ResolveTarget(name)
-    if not p then return end
-    local root0 = GetRoot(p)
-    if not root0 then return end
-    StopAll()
-    SetNoclip(true)
-    spacing = tonumber(spacing) or 8
-    local maxH = 14
-    local lastFetch = 0
-    local smooth = {0, 0, 0, 0, 0, 0, 0, 0}
-    local display = 0
-    local center = root0.Position
-    pcall(function()
-        local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
-        if hum then
-            hum.AutoRotate = false
-            hum.PlatformStand = true
-        end
-    end)
-    ActiveLoops.visualizer2 = RunService.Heartbeat:Connect(function()
-        local root = GetRoot(p)
-        local myRoot = GetRoot(LP)
-        if not myRoot then return end
-        if root then
-            center = root.Position
-        end
-        if tick() - lastFetch > 0.15 then
-            lastFetch = tick()
-            local data = getEq()
-            if data and type(data.bands) == "table" then
-                for i = 1, 8 do
-                    local v = tonumber(data.bands[i]) or 0
-                    smooth[i] = smooth[i] * 0.7 + v * 0.3
-                end
-            end
-        end
-        local idx, total = GetAltIndex()
-        total = math.max(total, 1)
-        local angle = ((idx - 1) / total) * math.pi * 2
-        local bandIdx = ((idx - 1) % 8) + 1
-        local level = math.clamp(smooth[bandIdx] or 0, 0, 1)
-        display = display * 0.82 + level * 0.18
-        local height = display * maxH
-        local pos = center + Vector3.new(math.cos(angle) * spacing, height, math.sin(angle) * spacing)
-        applyRootCF(myRoot, CFrame.new(pos), nil)
-    end)
-end
-
 Commands = {
     adduser = function(a) cmd_adduser(table.concat(a, " ")) end,
     removeuser = function(a) cmd_removeuser(table.concat(a, " ")) end,
@@ -3073,8 +2952,6 @@ Commands = {
     walkto = function(a) cmd_walkto(a[1]) end,
     pf = function(a) cmd_pf(a[1]) end,
     circle = function(a) cmd_circle(a[1], a[2]) end,
-    visualizer = function(a) cmd_visualizer(a[1], a[2]) end,
-    visualizer2 = function(a) cmd_visualizer2(a[1], a[2]) end,
     orbit = function(a) cmd_orbit(a[1], a[2]) end,
     corbit = function(a) cmd_corbit(a[1], a[2]) end,
     triangle = function(a) cmd_triangle(a[1], a[2]) end,
@@ -3124,8 +3001,6 @@ Commands = {
     stop = function() StopAll() cmd_unspam() end,
     unfollow = function() StopAll() end,
     unorbit = function() StopAll() end,
-    unvisualizer = function() StopAll() end,
-    unvisualizer2 = function() StopAll() end,
     uncorbit = function() StopAll() end,
     untriangle = function() StopAll() end,
     unsquare = function() StopAll() end,
