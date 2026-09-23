@@ -1249,7 +1249,6 @@ local function worldOrbitLoop(p, getOffset)
     local root = GetRoot(p)
     if not root then return end
     StopAll()
-    StartDance2()
     SetNoclip(true)
     local spin = 0
     local lastT = tick()
@@ -1258,11 +1257,19 @@ local function worldOrbitLoop(p, getOffset)
         if hum then
             hum.AutoRotate = false
             hum.PlatformStand = true
+            hum.WalkSpeed = 0
+            hum.JumpPower = 0
+        end
+        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            hrp.Anchored = false
         end
     end)
     ActiveLoops.orbit = RunService.Heartbeat:Connect(function()
+        if not p or not p.Parent then return end
         root = GetRoot(p)
-        local myRoot = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") or GetRoot(LP)
+        local char = LP.Character
+        local myRoot = char and char:FindFirstChild("HumanoidRootPart")
         if not root or not myRoot then return end
         local now = tick()
         local dt = math.clamp(now - lastT, 0, 0.05)
@@ -1272,7 +1279,9 @@ local function worldOrbitLoop(p, getOffset)
         local cf, newSpin = getOffset(idx, total, root, spin, dt)
         spin = newSpin
         if typeof(cf) == "CFrame" then
-            applyRootCF(myRoot, cf, myRoot)
+            myRoot.CFrame = cf
+            myRoot.AssemblyLinearVelocity = Vector3.zero
+            myRoot.AssemblyAngularVelocity = Vector3.zero
         end
     end)
 end
@@ -1285,20 +1294,21 @@ local function cmd_orbit(name, rad)
     if not p then
         p = Players:FindFirstChild(S.mainAccount)
     end
-    if not p then return end
+    if not p or not GetRoot(p) then return end
     if tonumber(rad) then
         MoveSettings.OrbitRadius = tonumber(rad)
     elseif tonumber(name) then
         MoveSettings.OrbitRadius = tonumber(name)
     end
     worldOrbitLoop(p, function(idx, total, root, spin, dt)
-        local r = MoveSettings.OrbitRadius
+        local r = MoveSettings.OrbitRadius or 7
         total = math.max(total, 1)
         idx = math.clamp(idx, 1, total)
-        spin = (spin + MoveSettings.OrbitSpeed * dt) % (math.pi * 2)
+        spin = (spin + (MoveSettings.OrbitSpeed or 1.8) * dt) % (math.pi * 2)
         local angle = ((idx - 1) / total) * math.pi * 2 + spin
-        local pos = root.Position + Vector3.new(math.cos(angle) * r, MoveSettings.Height, math.sin(angle) * r)
-        return CFrame.lookAt(pos, root.Position), spin
+        local center = root.Position
+        local pos = center + Vector3.new(math.cos(angle) * r, MoveSettings.Height or 0, math.sin(angle) * r)
+        return CFrame.lookAt(pos, center), spin
     end)
 end
 
