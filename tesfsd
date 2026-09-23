@@ -678,7 +678,7 @@ end
 local function GetAltIndex()
     local list = {}
     for _, plr in ipairs(Players:GetPlayers()) do
-        if S.altAccounts[plr.Name] then
+        if S.altAccounts[plr.Name] and GetRoot(plr) then
             table.insert(list, plr.Name)
         end
     end
@@ -1274,7 +1274,7 @@ local function worldOrbitLoop(p, getOffset)
         local cf, newSpin = getOffset(idx, total, root, spin, dt)
         spin = newSpin
         if typeof(cf) == "CFrame" then
-            applyRootCF(myRoot, cf, root)
+            applyRootCF(myRoot, cf, nil)
         end
     end)
 end
@@ -1287,29 +1287,22 @@ local function cmd_orbit(name, rad)
     end
     worldOrbitLoop(p, function(idx, total, root, spin, dt)
         local r = MoveSettings.OrbitRadius
-        local slowFactor = 1
-        local list = {}
-        for _, plr in ipairs(Players:GetPlayers()) do
-            if S.altAccounts[plr.Name] and GetRoot(plr) then
-                table.insert(list, plr)
-            end
-        end
-        table.sort(list, function(a, b) return a.Name < b.Name end)
-        for i, plr in ipairs(list) do
-            local pr = GetRoot(plr)
-            if pr then
-                local baseI = ((i - 1) / total) * math.pi * 2
-                local ideal = (root.CFrame * CFrame.new(math.cos(baseI + spin) * r, MoveSettings.Height, math.sin(baseI + spin) * r)).Position
-                local lag = (pr.Position - ideal).Magnitude
-                if lag > 4 then
-                    slowFactor = math.min(slowFactor, 4 / lag)
-                end
-            end
-        end
-        spin = (spin + MoveSettings.OrbitSpeed * dt * math.max(slowFactor, 0.15)) % (math.pi * 2)
+        total = math.max(total, 1)
+        idx = math.clamp(idx, 1, total)
+        spin = (spin + MoveSettings.OrbitSpeed * dt) % (math.pi * 2)
         local angle = ((idx - 1) / total) * math.pi * 2 + spin
-        local world = root.CFrame * CFrame.new(math.cos(angle) * r, MoveSettings.Height, math.sin(angle) * r)
-        return CFrame.lookAt(world.Position, root.Position), spin
+        local offset = Vector3.new(math.cos(angle) * r, MoveSettings.Height, math.sin(angle) * r)
+        local pos = root.Position + offset
+        local myRoot = GetRoot(LP)
+        if myRoot then
+            local dist = (myRoot.Position - pos).Magnitude
+            if dist > r * 3 + 15 then
+                myRoot.CFrame = CFrame.lookAt(pos, root.Position)
+                myRoot.AssemblyLinearVelocity = Vector3.zero
+                myRoot.AssemblyAngularVelocity = Vector3.zero
+            end
+        end
+        return CFrame.lookAt(pos, root.Position), spin
     end)
 end
 
